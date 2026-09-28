@@ -62,7 +62,9 @@ smartpos/
 │   │   ├── 002_transactions.sql  purchase, sale, sale return, stock, payments
 │   │   └── 003_seed.sql       default warehouse, units, admin user, settings
 │   └── my.cnf                 InnoDB, utf8mb4, READ-COMMITTED, strict mode
-├── docs/ARCHITECTURE.md       layer rules and the data-consistency invariants
+├── docs/
+│   ├── PLAN.md            architecture diagrams + module-by-module build plan
+│   └── ARCHITECTURE.md    layer rules and the data-consistency invariants
 ├── scripts/
 │   ├── init_db.py             apply the schema to a non-Docker MySQL
 │   └── run_dev.sh             start db, wait, launch app
@@ -97,6 +99,9 @@ always written together, in one transaction, through
 `StockService.apply_movement()`.
 
 ## Build order
+
+Full plan with architecture diagrams, per-module tasks and acceptance
+criteria: **[docs/PLAN.md](docs/PLAN.md)**.
 
 The dependency order that avoids rework:
 
