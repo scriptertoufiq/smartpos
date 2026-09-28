@@ -63,7 +63,9 @@ smartpos/
 │   │   └── 003_seed.sql       default warehouse, units, admin user, settings
 │   └── my.cnf                 InnoDB, utf8mb4, READ-COMMITTED, strict mode
 ├── docs/
+│   ├── SYSTEM_DESIGN.md   the whole design: context, DFDs, sequences, UI, security
 │   ├── PLAN.md            architecture diagrams + module-by-module build plan
+│   ├── DATABASE.md        full schema design, open decisions
 │   └── ARCHITECTURE.md    layer rules and the data-consistency invariants
 ├── scripts/
 │   ├── init_db.py             apply the schema to a non-Docker MySQL
@@ -83,7 +85,8 @@ smartpos/
 
 ## Database
 
-15 tables. The ones that carry the most weight:
+20 tables today; the design in [docs/DATABASE.md](docs/DATABASE.md) proposes a
+21st (`document_sequences`). The ones that carry the most weight:
 
 | Table | Holds |
 |---|---|
@@ -100,8 +103,10 @@ always written together, in one transaction, through
 
 ## Build order
 
-Full plan with architecture diagrams, per-module tasks and acceptance
-criteria: **[docs/PLAN.md](docs/PLAN.md)**.
+Whole-system design (context, data flow, process, UI, security):
+**[docs/SYSTEM_DESIGN.md](docs/SYSTEM_DESIGN.md)**.
+Build plan with per-module tasks and acceptance criteria:
+**[docs/PLAN.md](docs/PLAN.md)**.
 
 The dependency order that avoids rework:
 

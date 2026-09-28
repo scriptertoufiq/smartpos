@@ -1,43 +1,14 @@
 -- ---------------------------------------------------------------------------
--- SmartPOS - base schema
--- Runs automatically on first start of the MySQL container.
+-- SmartPOS · 001 · Master data
+-- Access control, outlets, catalogue and trading parties.
+--
+-- Applied automatically, in filename order, on first start of the MySQL
+-- container. See docs/DATABASE.md for the design and the decisions behind it.
 -- ---------------------------------------------------------------------------
 
 SET NAMES utf8mb4;
 
--- --------------------------- users & access -------------------------------
-
-CREATE TABLE users (
-    id            INT UNSIGNED  NOT NULL AUTO_INCREMENT,
-    username      VARCHAR(50)   NOT NULL,
-    full_name     VARCHAR(120)  NOT NULL,
-    password_hash VARCHAR(255)  NOT NULL,
-    role          ENUM('admin', 'manager', 'cashier') NOT NULL DEFAULT 'cashier',
-    warehouse_id  INT UNSIGNED  NULL,
-    is_active     TINYINT(1)    NOT NULL DEFAULT 1,
-    last_login_at DATETIME      NULL,
-    created_at    DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at    DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    PRIMARY KEY (id),
-    UNIQUE KEY uq_users_username (username)
-) ENGINE=InnoDB;
-
-CREATE TABLE activity_log (
-    id          BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
-    user_id     INT UNSIGNED    NULL,
-    action      VARCHAR(60)     NOT NULL,
-    entity      VARCHAR(60)     NOT NULL,
-    entity_id   BIGINT UNSIGNED NULL,
-    detail      TEXT            NULL,
-    created_at  DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (id),
-    KEY idx_activity_user (user_id),
-    KEY idx_activity_created (created_at),
-    CONSTRAINT fk_activity_user FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE SET NULL
-) ENGINE=InnoDB;
-
--- ------------------------------ master data -------------------------------
-
+-- Warehouses come first: users reference them.
 CREATE TABLE warehouses (
     id         INT UNSIGNED NOT NULL AUTO_INCREMENT,
     code       VARCHAR(20)  NOT NULL,
@@ -51,9 +22,39 @@ CREATE TABLE warehouses (
     UNIQUE KEY uq_warehouses_code (code)
 ) ENGINE=InnoDB;
 
-ALTER TABLE users
-    ADD CONSTRAINT fk_users_warehouse FOREIGN KEY (warehouse_id)
-        REFERENCES warehouses (id) ON DELETE SET NULL;
+CREATE TABLE users (
+    id            INT UNSIGNED  NOT NULL AUTO_INCREMENT,
+    username      VARCHAR(50)   NOT NULL,
+    full_name     VARCHAR(120)  NOT NULL,
+    password_hash VARCHAR(255)  NOT NULL,
+    role          ENUM('admin', 'manager', 'cashier') NOT NULL DEFAULT 'cashier',
+    warehouse_id  INT UNSIGNED  NULL,
+    is_active     TINYINT(1)    NOT NULL DEFAULT 1,
+    last_login_at DATETIME      NULL,
+    created_at    DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at    DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (id),
+    UNIQUE KEY uq_users_username (username),
+    KEY idx_users_warehouse (warehouse_id),
+    CONSTRAINT fk_users_warehouse FOREIGN KEY (warehouse_id)
+        REFERENCES warehouses (id) ON DELETE SET NULL
+) ENGINE=InnoDB;
+
+-- Append-only. Survives the account it refers to.
+CREATE TABLE activity_log (
+    id         BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    user_id    INT UNSIGNED    NULL,
+    action     VARCHAR(60)     NOT NULL,
+    entity     VARCHAR(60)     NOT NULL,
+    entity_id  BIGINT UNSIGNED NULL,
+    detail     TEXT            NULL,
+    created_at DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (id),
+    KEY idx_activity_user (user_id),
+    KEY idx_activity_created (created_at),
+    CONSTRAINT fk_activity_user FOREIGN KEY (user_id)
+        REFERENCES users (id) ON DELETE SET NULL
+) ENGINE=InnoDB;
 
 CREATE TABLE categories (
     id         INT UNSIGNED NOT NULL AUTO_INCREMENT,
@@ -83,6 +84,7 @@ CREATE TABLE products (
     name           VARCHAR(160)   NOT NULL,
     category_id    INT UNSIGNED   NULL,
     unit_id        INT UNSIGNED   NULL,
+    -- Latest cost. NOT used for historic profit: sale_items.unit_cost is.
     purchase_price DECIMAL(12, 2) NOT NULL DEFAULT 0.00,
     sale_price     DECIMAL(12, 2) NOT NULL DEFAULT 0.00,
     tax_rate       DECIMAL(5, 2)  NOT NULL DEFAULT 0.00,
@@ -93,6 +95,7 @@ CREATE TABLE products (
     updated_at     DATETIME       NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     PRIMARY KEY (id),
     UNIQUE KEY uq_products_sku (sku),
+    -- NULL allowed, and MySQL permits many NULLs in a unique index.
     UNIQUE KEY uq_products_barcode (barcode),
     KEY idx_products_category (category_id),
     KEY idx_products_name (name),

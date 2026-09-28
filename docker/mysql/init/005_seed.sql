@@ -1,5 +1,6 @@
 -- ---------------------------------------------------------------------------
--- SmartPOS - minimum data the application needs in order to start.
+-- SmartPOS · 005 · Seed
+-- The minimum the application needs in order to start.
 -- ---------------------------------------------------------------------------
 
 SET NAMES utf8mb4;
@@ -19,12 +20,13 @@ INSERT INTO units (name, short_name) VALUES
 INSERT INTO categories (name) VALUES
     ('Uncategorised');
 
--- Counter sales that are not tied to a named customer use this row.
+-- Counter sales not tied to a named customer use this row. The application
+-- refuses to delete or un-flag it.
 INSERT INTO customers (name, is_walk_in) VALUES
     ('Walk-in Customer', 1);
 
 -- Default administrator.
--- password_hash below is a bcrypt hash of the literal string "admin123".
+-- password_hash is a bcrypt hash of the literal string "admin123".
 -- CHANGE THIS AFTER THE FIRST LOGIN.
 INSERT INTO users (username, full_name, password_hash, role, warehouse_id) VALUES
     ('admin',
@@ -33,11 +35,19 @@ INSERT INTO users (username, full_name, password_hash, role, warehouse_id) VALUE
      'admin',
      1);
 
+-- Numbers reset each year (design decision 8.1), so `period` holds the year.
+-- The application creates the next year's row on first use in that year.
+INSERT INTO document_sequences (doc_type, period, prefix, next_number, padding) VALUES
+    ('sale',        YEAR(CURDATE()), 'INV-', 1, 6),
+    ('purchase',    YEAR(CURDATE()), 'PUR-', 1, 6),
+    ('sale_return', YEAR(CURDATE()), 'RET-', 1, 6),
+    ('transfer',    YEAR(CURDATE()), 'TRF-', 1, 6);
+
 INSERT INTO settings (setting_key, setting_value) VALUES
-    ('shop_name',       'SmartPOS Retail'),
-    ('shop_address',    ''),
-    ('shop_phone',      ''),
-    ('currency_symbol', 'BDT'),
-    ('default_tax_rate','0.00'),
-    ('invoice_prefix',  'INV-'),
-    ('invoice_footer',  'Thank you for shopping with us.');
+    ('shop_name',        'SmartPOS Retail'),
+    ('shop_address',     ''),
+    ('shop_phone',       ''),
+    ('currency_symbol',  'BDT'),
+    ('default_tax_rate', '0.00'),
+    ('invoice_footer',   'Thank you for shopping with us.'),
+    ('idle_lock_minutes','15');
