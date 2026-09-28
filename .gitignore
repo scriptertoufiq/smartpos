@@ -1,0 +1,30 @@
+# Environment
+.env
+venv/
+.venv/
+env/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+
+# Application output
+backups/
+logs/
+*.log
+
+# PyInstaller
+*.spec.bak
+
+# Docker
+docker/mysql/data/
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/

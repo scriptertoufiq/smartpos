@@ -1,0 +1,64 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "smartpos"
+version = "0.1.0"
+description = "SmartPOS - A Desktop Point of Sale and Inventory Management System"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [
+    { name = "Md Tanvir Hassan Tonmay" },
+    { name = "Md Sabbir Hossain" },
+    { name = "Mursalin Akhter Shitol" },
+    { name = "Md. Toufiqul Islam" },
+    { name = "MST Fahomida Shafiq Mim" },
+]
+
+dependencies = [
+    "PyQt5>=5.15.10",
+    "mysql-connector-python>=8.3.0",
+    "python-dotenv>=1.0.1",
+    "bcrypt>=4.1.2",
+    "python-barcode>=0.15.1",
+    "Pillow>=10.2.0",
+    "reportlab>=4.1.0",
+    "openpyxl>=3.1.2",
+    "matplotlib>=3.8.3",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-qt>=4.4.0",
+    "ruff>=0.3.0",
+    "black>=24.2.0",
+    "pyinstaller>=6.5.0",
+]
+
+[project.scripts]
+smartpos = "smartpos.main:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+smartpos = ["ui/resources/*.qss", "ui/resources/icons/*"]
+
+[tool.black]
+line-length = 100
+target-version = ["py311"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]

@@ -1,0 +1,60 @@
+/* SmartPOS Qt stylesheet.
+   Loaded by main.py after the QApplication is created. */
+
+QMainWindow {
+    background: #f5f6f8;
+}
+
+/* Sidebar navigation */
+#sidebar {
+    background: #1f2937;
+    min-width: 200px;
+}
+
+#sidebar QPushButton {
+    color: #d1d5db;
+    background: transparent;
+    border: none;
+    padding: 12px 16px;
+    text-align: left;
+    font-size: 14px;
+}
+
+#sidebar QPushButton:hover {
+    background: #374151;
+    color: #ffffff;
+}
+
+#sidebar QPushButton:checked {
+    background: #2563eb;
+    color: #ffffff;
+}
+
+/* Tables */
+QTableView {
+    background: #ffffff;
+    gridline-color: #e5e7eb;
+    selection-background-color: #dbeafe;
+    selection-color: #111827;
+}
+
+QHeaderView::section {
+    background: #f3f4f6;
+    padding: 6px;
+    border: none;
+    border-bottom: 1px solid #e5e7eb;
+    font-weight: 600;
+}
+
+/* Primary action button */
+QPushButton[primary="true"] {
+    background: #2563eb;
+    color: #ffffff;
+    border-radius: 4px;
+    padding: 8px 18px;
+    font-weight: 600;
+}
+
+QPushButton[primary="true"]:hover {
+    background: #1d4ed8;
+}
