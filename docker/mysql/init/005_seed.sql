@@ -26,12 +26,13 @@ INSERT INTO customers (name, is_walk_in) VALUES
     ('Walk-in Customer', 1);
 
 -- Default administrator.
--- password_hash is a bcrypt hash of the literal string "admin123".
+-- password_hash is a real bcrypt hash (cost 12) of the string "admin123",
+-- generated with bcrypt and verified. Do not hand-edit it.
 -- CHANGE THIS AFTER THE FIRST LOGIN.
 INSERT INTO users (username, full_name, password_hash, role, warehouse_id) VALUES
     ('admin',
      'System Administrator',
-     '$2b$12$LQv3c1yqBWVHxkd0LHAkCOYz6TtxMQJqhN8/LewdBPj/RQ7pJHvYy',
+     '$2b$12$s6NMuA4cjIidjSJZHpVvlekJrilgR5Y6cc2H.wE1eQJ.bQ3q5IwFG',
      'admin',
      1);
 

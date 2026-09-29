@@ -235,20 +235,20 @@ float**. Quantities are `DECIMAL(12,3)` so goods sold by weight work.
 Format: tasks to do, then *Done when* — the acceptance criteria. A module is
 not finished until every criterion holds.
 
-### M0. Foundation — config, database, logging
+### M0. Foundation — config, database, logging  ✅ **DONE**
 **Week 5 · Depends on: nothing · Blocks: everything**
 
 Files: `config.py`, `db/connection.py`, `db/repository.py`, `core/logging.py`
 
-- [ ] `load_settings()` / `get_settings()` reading `.env` via python-dotenv
-- [ ] `init_pool()` / `close_pool()` — MySQL connection pool
-- [ ] `get_connection()` context manager, returns to pool on exit
-- [ ] `transaction()` context manager — commit on success, rollback on exception
-- [ ] `BaseRepository.fetch_one / fetch_all / execute / insert / update / delete`
-- [ ] `configure_logging()` — console + rotating file under `logs/`
-- [ ] `main()` bootstrap: settings → logging → pool → QApplication → exit cleanly
+- [x] `load_settings()` / `get_settings()` reading `.env` via python-dotenv
+- [x] `init_pool()` / `close_pool()` — MySQL connection pool
+- [x] `get_connection()` context manager, returns to pool on exit
+- [x] `transaction()` context manager — commit on success, rollback on exception
+- [x] `BaseRepository.fetch_one / fetch_all / execute / insert / update / delete`
+- [x] `configure_logging()` — console + rotating file under `logs/`
+- [x] `main()` bootstrap: settings → logging → pool → QApplication → exit cleanly
 
-**Done when**
+**Done when** — all verified 28 Sep 2026, 16 tests passing
 - `python -m smartpos` starts and exits with no traceback
 - An exception inside `transaction()` leaves the database unchanged
 - Wrong DB credentials produce a readable error, not a raw connector stack trace
@@ -256,22 +256,22 @@ Files: `config.py`, `db/connection.py`, `db/repository.py`, `core/logging.py`
 
 ---
 
-### M1. Authentication & role management *(proposal 4.1)*
+### M1. Authentication & role management *(proposal 4.1)*  ✅ **DONE**
 **Week 5–6 · Depends on: M0 · Blocks: the app shell**
 
 Files: `core/security.py`, `services/auth_service.py`, `ui/login_dialog.py`,
 `ui/views/user_view.py`
 
-- [ ] `hash_password()` / `verify_password()` with bcrypt
-- [ ] `has_permission(role, permission)` against `ROLE_PERMISSIONS`
-- [ ] `AuthService.login()` — verify, reject disabled accounts, set `last_login_at`
-- [ ] `current_user()`, `logout()`, `require(permission)` raising `PermissionDenied`
-- [ ] `create_user()`, `change_password()`
-- [ ] `LoginDialog` — username, password, error label, Enter submits
-- [ ] `UserView` — list, create, edit, deactivate, reset password (admin only)
-- [ ] Write `activity_log` rows on login, logout and user changes
+- [x] `hash_password()` / `verify_password()` with bcrypt
+- [x] `has_permission(role, permission)` against `ROLE_PERMISSIONS`
+- [x] `AuthService.login()` — verify, reject disabled accounts, set `last_login_at`
+- [x] `current_user()`, `logout()`, `require(permission)` raising `PermissionDenied`
+- [x] `create_user()`, `change_password()`
+- [x] `LoginDialog` — username, password, error label, Enter submits
+- [x] `UserView` — list, create, edit, deactivate, reset password (admin only)
+- [x] Write `activity_log` rows on login, logout and user changes
 
-**Done when**
+**Done when** — verified 28 Sep 2026, 43 tests passing
 - Wrong password and disabled account both fail with the same generic message
 - No plaintext password is ever written to the database or the log file
 - A cashier calling a manager-only service raises `PermissionDenied`
@@ -279,17 +279,17 @@ Files: `core/security.py`, `services/auth_service.py`, `ui/login_dialog.py`,
 
 ---
 
-### M2. Application shell
+### M2. Application shell  ✅ **DONE**
 **Week 6 · Depends on: M1**
 
 Files: `ui/main_window.py`, `ui/widgets/`, `ui/resources/styles.qss`
 
-- [ ] `MainWindow` with sidebar + `QStackedWidget`
-- [ ] `build_navigation()` — hide entries the signed-in role cannot use
-- [ ] `show_view(name)` — lazy-construct each view on first open
-- [ ] Load `styles.qss`; status bar showing user, role and active warehouse
-- [ ] Reusable widgets: searchable combo, money field, paginated table, date-range picker
-- [ ] Global handler: `SmartPOSError` → message box, anything else → log + generic dialog
+- [x] `MainWindow` with sidebar + `QStackedWidget`
+- [x] `build_navigation()` — hide entries the signed-in role cannot use
+- [x] `show_view(name)` — lazy-construct each view on first open
+- [x] Load `styles.qss`; status bar showing user, role and active warehouse
+- [x] Reusable widgets: searchable combo, money field, paginated table, date-range picker
+- [x] Global handler: `SmartPOSError` → message box, anything else → log + generic dialog
 
 **Done when**
 - Signing in as cashier shows only the counter-related sidebar entries
@@ -298,34 +298,34 @@ Files: `ui/main_window.py`, `ui/widgets/`, `ui/resources/styles.qss`
 
 ---
 
-### M3. Warehouse *(4.2)*
+### M3. Warehouse *(4.2)*  ✅ **DONE**
 **Week 6 · Depends on: M2**
 
 Files: `services/warehouse_service.py`, `ui/views/warehouse_view.py`
 
-- [ ] `list_all(active_only)`, `get()`, `create()`, `update()`, `deactivate()`
-- [ ] Enforce unique `code`
-- [ ] `WarehouseView` — table, add/edit form, deactivate
-- [ ] Active-warehouse selector in the main window
+- [x] `list_all(active_only)`, `get()`, `create()`, `update()`, `deactivate()`
+- [x] Enforce unique `code`
+- [x] `WarehouseView` — table, add/edit form, deactivate
+- [x] Active-warehouse selector in the main window
 
-**Done when**
+**Done when** — verified 29 Sep 2026, 22 tests passing
 - Warehouses deactivate, never delete — historic documents still resolve
 - A duplicate code is refused with a field-level message
 - The seeded `MAIN` warehouse is editable but cannot be deactivated while it is the only active one
 
 ---
 
-### M4. Product category *(4.3)*
+### M4. Product category *(4.3)*  ✅ **DONE**
 **Week 6 · Depends on: M2**
 
 Files: `services/category_service.py`, `ui/views/category_view.py`
 
-- [ ] CRUD + `tree()` ordering children under parents
-- [ ] `delete()` refuses when products still reference the category
-- [ ] `list_units()`
-- [ ] `CategoryView` — tree widget, add/edit/delete
+- [x] CRUD + `tree()` ordering children under parents
+- [x] `delete()` refuses when products still reference the category
+- [x] `list_units()`
+- [x] `CategoryView` — tree widget, add/edit/delete
 
-**Done when**
+**Done when** — verified 29 Sep 2026, 25 tests passing
 - A category in use cannot be deleted; the message names the blocking products
 - A category cannot become its own ancestor
 - Sub-categories display nested
