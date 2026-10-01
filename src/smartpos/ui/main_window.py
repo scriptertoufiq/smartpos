@@ -32,6 +32,17 @@ from smartpos.core.logging import get_logger
 from smartpos.services.auth_service import AuthService
 from smartpos.services.warehouse_service import WarehouseService
 from smartpos.ui.views.category_view import CategoryView
+from smartpos.ui.views.dashboard_view import DashboardView
+from smartpos.ui.views.customer_view import CustomerView
+from smartpos.ui.views.pos_view import PosView
+from smartpos.ui.views.product_view import ProductView
+from smartpos.ui.views.report_view import ReportView
+from smartpos.ui.views.settings_view import SettingsView
+from smartpos.ui.views.sale_list_view import SaleListView
+from smartpos.ui.views.sale_return_view import SaleReturnView
+from smartpos.ui.views.purchase_view import PurchaseView
+from smartpos.ui.views.stock_view import StockView
+from smartpos.ui.views.supplier_view import SupplierView
 from smartpos.ui.views.user_view import UserView
 from smartpos.ui.views.warehouse_view import WarehouseView
 
@@ -82,43 +93,33 @@ def _pending(title: str, milestone: str, summary: str):
 
 NAVIGATION: tuple[NavEntry, ...] = (
     NavEntry("dashboard", "Dashboard", "report.view",
-             _pending("Dashboard", "M11",
-                      "Today's sales and collection, low-stock count and a sales "
-                      "trend chart.")),
+             lambda win: DashboardView(win.auth, win)),
     NavEntry("pos", "POS Counter", "sale.create",
-             _pending("POS Counter", "M9",
-                      "Barcode entry, cart, discount, payment and invoice "
-                      "printing. The screen cashiers live in.")),
+             lambda win: PosView(win.auth, win)),
     NavEntry("sales", "Sales", "sale.view",
-             _pending("Sales", "M9", "Past invoices, with date and customer filters.")),
-    NavEntry("returns", "Returns", "sale_return.create",
-             _pending("Sale Returns", "M10",
-                      "Return against an invoice number, for the whole invoice or "
-                      "selected lines.")),
+             lambda win: SaleListView(win.auth, win)),
+    NavEntry("returns", "Returns", "sale_return.view",
+             lambda win: SaleReturnView(win.auth, win)),
     NavEntry("purchases", "Purchases", "purchase.manage",
-             _pending("Purchases", "M8", "Record goods received from a supplier.")),
+             lambda win: PurchaseView(win.auth, win)),
     NavEntry("products", "Products", "product.view",
-             _pending("Products", "M5",
-                      "Catalogue, barcode labels, CSV import and export.")),
+             lambda win: ProductView(win.auth, win)),
     NavEntry("categories", "Categories", "category.manage",
              lambda win: CategoryView(win.auth, win)),
     NavEntry("customers", "Customers", "customer.view",
-             _pending("Customers", "M6", "Profiles, purchase history and dues.")),
+             lambda win: CustomerView(win.auth, win)),
     NavEntry("suppliers", "Suppliers", "supplier.manage",
-             _pending("Suppliers", "M6", "Profiles, payables and payments made.")),
+             lambda win: SupplierView(win.auth, win)),
     NavEntry("stock", "Stock", "stock.manage",
-             _pending("Stock", "M7",
-                      "Levels per warehouse, transfers, adjustments and the "
-                      "movement ledger.")),
+             lambda win: StockView(win.auth, win)),
     NavEntry("reports", "Reports", "report.view",
-             _pending("Reports", "M11", "Sales, profit, stock and due statements.")),
+             lambda win: ReportView(win.auth, win)),
     NavEntry("warehouses", "Warehouses", "warehouse.view",
              lambda win: WarehouseView(win.auth, win)),
     NavEntry("users", "Users", "user.manage",
              lambda win: UserView(win.auth, win)),
     NavEntry("settings", "Settings", "settings.manage",
-             _pending("Settings", "M12",
-                      "Shop profile, currency, tax rate, invoice footer and backup.")),
+             lambda win: SettingsView(win.auth, win)),
 )
 
 

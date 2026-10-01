@@ -62,3 +62,6 @@ select = ["E", "F", "I", "UP", "B"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
+markers = [
+    "slow: tests that build a large dataset (performance budgets)",
+]

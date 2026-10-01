@@ -164,3 +164,46 @@ QStatusBar QLabel { color: #6b7280; font-size: 12px; }
     font-size: 12px;
     min-height: 22px;
 }
+
+#panelHeading { font-size: 13px; font-weight: 600; color: #374151; }
+#balanceStrong { font-size: 16px; font-weight: 700; color: #b91c1c; }
+
+/* ------------------------------------------------------------ POS counter */
+#posEntry {
+    font-size: 16px;
+    border: 2px solid #2563eb;
+    padding: 6px 12px;
+}
+#posTotals {
+    background: #ffffff;
+    border: 1px solid #e5e7eb;
+    border-radius: 6px;
+    min-width: 260px;
+}
+#posTotal { font-size: 30px; font-weight: 700; color: #111827; }
+#posChange { font-size: 15px; font-weight: 600; color: #047857; }
+#posComplete {
+    background: #16a34a;
+    color: #ffffff;
+    font-size: 15px;
+    font-weight: 700;
+    border: none;
+    border-radius: 5px;
+}
+#posComplete:hover:enabled { background: #15803d; }
+#posComplete:disabled { background: #d1d5db; color: #9ca3af; }
+
+/* --------------------------------------------------------- dashboard */
+#statTile {
+    background: #ffffff;
+    border: 1px solid #e5e7eb;
+    border-radius: 6px;
+}
+#statCaption { color: #6b7280; font-size: 11px; }
+#statValue   { color: #111827; font-size: 22px; font-weight: 700; }
+#statDetail  { color: #9ca3af; font-size: 11px; }
+#panelCard {
+    background: #ffffff;
+    border: 1px solid #e5e7eb;
+    border-radius: 6px;
+}

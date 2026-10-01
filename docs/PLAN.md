@@ -332,20 +332,20 @@ Files: `services/category_service.py`, `ui/views/category_view.py`
 
 ---
 
-### M5. Product *(4.4)*
+### M5. Product *(4.4)*  ✅ **DONE**
 **Week 6–7 · Depends on: M3, M4**
 
 Files: `services/product_service.py`, `utils/barcode.py`, `ui/views/product_view.py`
 
-- [ ] `search()` across name / SKU / barcode
-- [ ] `get_by_barcode()` — exact, indexed, this is the scanner path
-- [ ] `create()`, `update()`, `deactivate()`
-- [ ] `generate_barcode()` → EAN-13 with correct check digit
-- [ ] `render_label()` / `render_label_sheet()`
-- [ ] `import_csv()` / `export_csv()` with a per-row error report
-- [ ] `ProductView` — table, filters, form with image picker, label printing
+- [x] `search()` across name / SKU / barcode
+- [x] `get_by_barcode()` — exact, indexed, this is the scanner path
+- [x] `create()`, `update()`, `deactivate()`
+- [x] `generate_barcode()` → EAN-13 with correct check digit
+- [x] `render_label()` / `render_label_sheet()`
+- [x] `import_csv()` / `export_csv()` with a per-row error report
+- [x] `ProductView` — table, filters, form with image picker, label printing
 
-**Done when**
+**Done when** — verified 29 Sep 2026, 52 tests passing
 - `get_by_barcode()` returns in under 50 ms on 5,000 products
 - Generated EAN-13 codes validate against a standard checker
 - A CSV import with 3 bad rows out of 100 imports 97 and reports the 3
@@ -353,40 +353,40 @@ Files: `services/product_service.py`, `utils/barcode.py`, `ui/views/product_view
 
 ---
 
-### M6. Customer *(4.5)* and Supplier *(4.6)*
+### M6. Customer *(4.5)* and Supplier *(4.6)*  ✅ **DONE**
 **Week 7 · Depends on: M2**
 
 Files: `services/customer_service.py`, `services/supplier_service.py`,
 `ui/views/customer_view.py`, `ui/views/supplier_view.py`
 
-- [ ] Both: `search()`, `get()`, `create()`, `update()`
-- [ ] `CustomerService.get_walk_in()` — the default counter customer
-- [ ] `due_balance()` = opening + unpaid sales − returns − collections
-- [ ] `collect_due()` writing a `payments` row
-- [ ] `SupplierService.payable_balance()`, `pay()`
-- [ ] Both views: table, form, ledger tab, payment dialog
+- [x] Both: `search()`, `get()`, `create()`, `update()`
+- [x] `CustomerService.get_walk_in()` — the default counter customer
+- [x] `due_balance()` = opening + unpaid sales − returns − collections
+- [x] `collect_due()` writing a `payments` row
+- [x] `SupplierService.payable_balance()`, `pay()`
+- [x] Both views: table, form, ledger tab, payment dialog
 
-**Done when**
+**Done when** — verified 30 Sep 2026, 33 tests passing
 - The walk-in customer cannot be deleted or renamed away
 - A due balance recomputed from `payments` matches the displayed figure to the paisa
 - Collecting more than the outstanding due is refused
 
 ---
 
-### M7. Stock management *(4.10)* — **build before purchase or sale**
+### M7. Stock management *(4.10)* — **build before purchase or sale**  ✅ **DONE**
 **Week 7–9 · Depends on: M5, M3 · Blocks: M8, M9, M10**
 
 Files: `services/stock_service.py`, `ui/views/stock_view.py`
 
-- [ ] `apply_movement()` — the **only** write path to `stock` + `stock_movements`
-- [ ] `quantity_on_hand()` using `SELECT ... FOR UPDATE` inside a transaction
-- [ ] `levels()`, `low_stock()` against `reorder_level`
-- [ ] `transfer()` — one `transfer_out` + one `transfer_in`, single transaction
-- [ ] `adjust()` — set an absolute quantity, require a reason, log the delta
-- [ ] `ledger()` — movement history with running balance
-- [ ] `StockView` — per-warehouse levels, transfer dialog, adjustment dialog, ledger
+- [x] `apply_movement()` — the **only** write path to `stock` + `stock_movements`
+- [x] `quantity_on_hand()` using `SELECT ... FOR UPDATE` inside a transaction
+- [x] `levels()`, `low_stock()` against `reorder_level`
+- [x] `transfer()` — one `transfer_out` + one `transfer_in`, single transaction
+- [x] `adjust()` — set an absolute quantity, require a reason, log the delta
+- [x] `ledger()` — movement history with running balance
+- [x] `StockView` — per-warehouse levels, transfer dialog, adjustment dialog, ledger
 
-**Done when**
+**Done when** — verified 1 Oct 2026, 27 tests passing
 - `SUM(stock_movements.quantity)` equals `stock.quantity` for every
   (product, warehouse) pair — verify with a SQL check after a test run
 - Every movement row names its source document via `reference_type` / `reference_id`
@@ -396,21 +396,21 @@ Files: `services/stock_service.py`, `ui/views/stock_view.py`
 
 ---
 
-### M8. Purchase *(4.7)*
+### M8. Purchase *(4.7)*  ✅ **DONE**
 **Week 7–9 · Depends on: M6 (supplier), M7**
 
 Files: `services/purchase_service.py`, `ui/views/purchase_view.py`,
 `ui/views/purchase_list_view.py`
 
-- [ ] `create()` — header + items + stock increases + movements, one transaction
-- [ ] `next_reference_no()` — gapless, concurrency-safe
-- [ ] `list()` with date / supplier / warehouse filters
-- [ ] `record_payment()` recalculating `payment_status`
-- [ ] Update `products.purchase_price` on receipt
-- [ ] `PurchaseView` — supplier + warehouse pickers, line editor, totals
-- [ ] Printable purchase invoice
+- [x] `create()` — header + items + stock increases + movements, one transaction
+- [x] `next_reference_no()` — gapless, concurrency-safe
+- [x] `list()` with date / supplier / warehouse filters
+- [x] `record_payment()` recalculating `payment_status`
+- [x] Update `products.purchase_price` on receipt
+- [x] `PurchaseView` — supplier + warehouse pickers, line editor, totals
+- [x] Printable purchase invoice
 
-**Done when**
+**Done when** — verified 1 Oct 2026, 27 tests passing
 - A confirmed purchase raises stock by exactly the quantity received
 - Totals reconcile: `sum(line_total) − discount + tax == grand_total`
 - `payment_status` follows `paid_amount` — paid / partial / due
@@ -418,22 +418,22 @@ Files: `services/purchase_service.py`, `ui/views/purchase_view.py`,
 
 ---
 
-### M9. Sale / POS counter *(4.8)* — **the module that matters most**
+### M9. Sale / POS counter *(4.8)* — **the module that matters most**  ✅ **DONE**
 **Week 10–12 · Depends on: M6 (customer), M7**
 
 Files: `services/sale_service.py`, `ui/views/pos_view.py`,
 `ui/views/sale_list_view.py`, `reports/invoice.py`
 
-- [ ] `create()` — lock stock, insert sale + items, deduct stock, write movements, commit
-- [ ] Copy `unit_cost` onto each line at sale time (protects historic profit figures)
-- [ ] `hold()` / `list_held()` / `resume()` — no stock effect while held
-- [ ] `next_invoice_no()`, `get_by_invoice()`
-- [ ] `record_payment()` for due sales
-- [ ] `PosView`: barcode field always focused, cart table, line and overall discount,
+- [x] `create()` — lock stock, insert sale + items, deduct stock, write movements, commit
+- [x] Copy `unit_cost` onto each line at sale time (protects historic profit figures)
+- [x] `hold()` / `list_held()` / `resume()` — no stock effect while held
+- [x] `next_invoice_no()`, `get_by_invoice()`
+- [x] `record_payment()` for due sales
+- [x] `PosView`: barcode field always focused, cart table, line and overall discount,
       tax, payment panel with change calculation, keyboard shortcuts
-- [ ] `render_thermal()` (80 mm) and `render_a4()`; `print_invoice()`
+- [x] `render_thermal()` (80 mm) and `render_a4()`; `print_invoice()`
 
-**Done when**
+**Done when** — verified 1 Oct 2026, 37 tests passing
 - A scan-to-printed-invoice sale completes in under 5 seconds
 - Selling more than on hand raises `InsufficientStock` and writes nothing
 - A held bill blocks no stock and can be resumed on another terminal
@@ -443,18 +443,18 @@ Files: `services/sale_service.py`, `ui/views/pos_view.py`,
 
 ---
 
-### M10. Sale return *(4.9)*
+### M10. Sale return *(4.9)*  ✅ **DONE**
 **Week 12 · Depends on: M9**
 
 Files: `services/sale_return_service.py`, `ui/views/sale_return_view.py`
 
-- [ ] `returnable_quantities(sale_id)` — sold minus already returned, per line
-- [ ] `create()` — return rows + stock increases + refund, one transaction
-- [ ] Refund by cash, or adjust against the customer's due
-- [ ] `list()`, return note printing
-- [ ] `SaleReturnView` — invoice lookup, line selector with max quantities
+- [x] `returnable_quantities(sale_id)` — sold minus already returned, per line
+- [x] `create()` — return rows + stock increases + refund, one transaction
+- [x] Refund by cash, or adjust against the customer's due
+- [x] `list()`, return note printing
+- [x] `SaleReturnView` — invoice lookup, line selector with max quantities
 
-**Done when**
+**Done when** — verified 1 Oct 2026, 24 tests passing
 - Returning more than was sold is refused, counting earlier returns
 - Returned quantity reappears in the warehouse the sale left from
 - Sales reports show sales net of returns
@@ -462,22 +462,22 @@ Files: `services/sale_return_service.py`, `ui/views/sale_return_view.py`
 
 ---
 
-### M11. Reports & dashboard *(4.11)*
+### M11. Reports & dashboard *(4.11)*  ✅ **DONE**
 **Week 13–14 · Depends on: M8, M9, M10**
 
 Files: `services/report_service.py`, `reports/exporters.py`, `ui/views/report_view.py`,
 `ui/views/dashboard_view.py`
 
-- [ ] `dashboard_summary()` — today's sales, today's collection, low-stock count, trend
-- [ ] `sales_report()`, `purchase_report()`, `sale_return_report()`, `stock_report()`
-- [ ] `profit_loss()` from stored `unit_cost` — not current purchase price
-- [ ] `top_products()`, `slow_moving_products()`
-- [ ] `customer_dues()`, `supplier_payables()`
-- [ ] `to_pdf()`, `to_excel()`
-- [ ] `ReportView` — report picker, date range, results table, export buttons
-- [ ] `DashboardView` — stat tiles + Matplotlib trend chart
+- [x] `dashboard_summary()` — today's sales, today's collection, low-stock count, trend
+- [x] `sales_report()`, `purchase_report()`, `sale_return_report()`, `stock_report()`
+- [x] `profit_loss()` from stored `unit_cost` — not current purchase price
+- [x] `top_products()`, `slow_moving_products()`
+- [x] `customer_dues()`, `supplier_payables()`
+- [x] `to_pdf()`, `to_excel()`
+- [x] `ReportView` — report picker, date range, results table, export buttons
+- [x] `DashboardView` — stat tiles + Matplotlib trend chart
 
-**Done when**
+**Done when** — verified 1 Oct 2026, 24 tests passing
 - Every report's totals match a hand-written SQL check on the same data
 - Profit is unchanged after a product's purchase price is edited
 - Reports exclude held and cancelled sales
@@ -486,18 +486,18 @@ Files: `services/report_service.py`, `reports/exporters.py`, `ui/views/report_vi
 
 ---
 
-### M12. Backup & settings *(4.12)*
+### M12. Backup & settings *(4.12)*  ✅ **DONE**
 **Week 14 · Depends on: M11**
 
 Files: `services/backup_service.py`, `ui/views/settings_view.py`
 
-- [ ] `create_backup()` via `mysqldump`, timestamped filename
-- [ ] `restore_backup()` with an explicit confirmation step
-- [ ] `list_backups()`; optional scheduled backup on app close
-- [ ] `SettingsView` — shop name, logo, address, currency, tax rate, invoice footer
-- [ ] Settings read through the `settings` table, cached per session
+- [x] `create_backup()` via `mysqldump`, timestamped filename
+- [x] `restore_backup()` with an explicit confirmation step
+- [x] `list_backups()`; optional scheduled backup on app close
+- [x] `SettingsView` — shop name, logo, address, currency, tax rate, invoice footer
+- [x] Settings read through the `settings` table, cached per session
 
-**Done when**
+**Done when** — verified 1 Oct 2026, 22 tests passing
 - A backup restored into an empty database reproduces every row
 - Restore cannot run without a typed confirmation
 - Changing the shop name changes the next printed invoice

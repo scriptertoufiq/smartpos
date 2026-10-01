@@ -31,6 +31,18 @@ def db():
     connection.close_pool()
 
 
+def _product_for(svc, suffix: str) -> int:
+    """A product of this module's own, so the stock guards really run.
+
+    These two tests used to skip when the products table happened to be empty,
+    which it always is once each module purges after itself -- so the guard they
+    exist to prove was never actually exercised.
+    """
+    from smartpos.services.product_service import ProductService
+
+    return ProductService(svc._auth).create(f"{PREFIX}P{suffix}", f"Guard {suffix}")
+
+
 def _purge() -> None:
     with connection.transaction() as conn:
         cur = conn.cursor()
@@ -38,6 +50,9 @@ def _purge() -> None:
                     "(SELECT id FROM warehouses WHERE code LIKE %s)", (PREFIX + "%",))
         cur.execute("DELETE FROM stock WHERE warehouse_id IN "
                     "(SELECT id FROM warehouses WHERE code LIKE %s)", (PREFIX + "%",))
+        cur.execute("DELETE FROM stock WHERE product_id IN "
+                    "(SELECT id FROM products WHERE sku LIKE %s)", (PREFIX + "%",))
+        cur.execute("DELETE FROM products WHERE sku LIKE %s", (PREFIX + "%",))
         cur.execute("DELETE FROM warehouses WHERE code LIKE %s", (PREFIX + "%",))
         cur.execute("DELETE FROM users WHERE username LIKE 'zz_%'")
         cur.execute("UPDATE warehouses SET is_active = 1 WHERE code = 'MAIN'")
@@ -166,14 +181,12 @@ def test_the_only_active_outlet_cannot_be_closed(svc):
 def test_an_outlet_holding_stock_cannot_be_closed(svc):
     """Closing it would hide goods that are physically still on its shelves."""
     wid = svc.create(f"{PREFIX}L", "Holds Stock")
+    product_id = _product_for(svc, "L")
     with connection.transaction() as conn:
         cur = conn.cursor()
         cur.execute("INSERT INTO stock (product_id, warehouse_id, quantity) "
-                    "SELECT id, %s, 5 FROM products LIMIT 1", (wid,))
-        moved = cur.rowcount
+                    "VALUES (%s, %s, 5)", (product_id, wid))
         cur.close()
-    if not moved:
-        pytest.skip("no products yet -- stock guard is covered once M5 lands")
     with pytest.raises(ValidationError, match="still holds stock"):
         svc.deactivate(wid)
 
@@ -181,10 +194,11 @@ def test_an_outlet_holding_stock_cannot_be_closed(svc):
 def test_an_outlet_with_zero_stock_rows_can_still_be_closed(svc):
     """A zero-quantity row is not stock; it is just a ledger slot."""
     wid = svc.create(f"{PREFIX}M", "Empty Shelves")
+    product_id = _product_for(svc, "M")
     with connection.transaction() as conn:
         cur = conn.cursor()
         cur.execute("INSERT INTO stock (product_id, warehouse_id, quantity) "
-                    "SELECT id, %s, 0 FROM products LIMIT 1", (wid,))
+                    "VALUES (%s, %s, 0)", (product_id, wid))
         cur.close()
     svc.deactivate(wid)
     assert svc.get(wid).is_active is False
