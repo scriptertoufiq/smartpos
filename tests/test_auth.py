@@ -61,6 +61,43 @@ def auth(db):
     _purge_test_users()
 
 
+@pytest.fixture
+def sole_admin(auth):
+    """Make the seeded admin the only active one, and undo that afterwards.
+
+    The two lockout tests below used to assume the seeded `admin` was the only
+    administrator in the database. The moment a shop creates a second admin of
+    its own that stopped being true: the guard correctly did not fire, the
+    assertion failed, and -- because the restore was the last line of the test
+    rather than a teardown -- the seeded admin was left DISABLED. Every later
+    test that signs in as admin then failed too, which turned one wrong
+    assumption into hundreds of errors and locked the running application out
+    of its own database.
+
+    So the precondition is arranged here rather than assumed, and the restore
+    happens in teardown, which runs whether the test passes or fails.
+    """
+    with connection.transaction() as conn:
+        cur = conn.cursor(dictionary=True)
+        cur.execute("SELECT id FROM users WHERE role = 'admin' AND is_active = 1 "
+                    "AND username <> %s", (ADMIN_USERNAME,))
+        parked = [row["id"] for row in cur.fetchall()]
+        for user_id in parked:
+            cur.execute("UPDATE users SET is_active = 0 WHERE id = %s", (user_id,))
+        cur.close()
+    try:
+        yield auth
+    finally:
+        with connection.transaction() as conn:
+            cur = conn.cursor()
+            # The seeded admin always comes back, whatever the test did to it.
+            cur.execute("UPDATE users SET is_active = 1 WHERE username = %s",
+                        (ADMIN_USERNAME,))
+            for user_id in parked:
+                cur.execute("UPDATE users SET is_active = 1 WHERE id = %s", (user_id,))
+            cur.close()
+
+
 # ------------------------------------------------------------------ hashing
 
 def test_hash_and_verify_round_trip():
@@ -310,11 +347,11 @@ def test_delete_removes_an_unused_account(auth):
     assert auth.get_user(uid) is None
 
 
-def test_the_last_active_admin_cannot_be_disabled(auth):
+def test_the_last_active_admin_cannot_be_disabled(sole_admin):
     """The lockout guard: there must always be a way back in."""
-    admin_id = auth.current_user().id
-    other = auth.create_user(f"{TEST_PREFIX}admin2", "Second Admin", "password1",
-                             Role.ADMIN)
+    admin_id = sole_admin.current_user().id
+    other = sole_admin.create_user(f"{TEST_PREFIX}admin2", "Second Admin",
+                                   "password1", Role.ADMIN)
     second = AuthService()
     second.login(f"{TEST_PREFIX}admin2", "password1")
 
@@ -323,15 +360,16 @@ def test_the_last_active_admin_cannot_be_disabled(auth):
     # Now only this one remains, and it cannot remove itself either way.
     with pytest.raises(ValidationError, match="only active administrator"):
         second.update_user(other, role=Role.CASHIER)
+    # Disabling itself is refused too, though by the self-account guard, which
+    # is checked first -- see test_you_cannot_disable_your_own_account.
+    # The seeded admin is switched back on by the fixture's teardown, which
+    # runs even if the assertion above fails.
 
-    # restore the seeded admin for the rest of the suite
-    second.activate_user(admin_id)
 
-
-def test_the_last_admin_cannot_be_demoted(auth):
-    admin_id = auth.current_user().id
+def test_the_last_admin_cannot_be_demoted(sole_admin):
+    admin_id = sole_admin.current_user().id
     with pytest.raises(ValidationError, match="only active administrator"):
-        auth.update_user(admin_id, role=Role.MANAGER)
+        sole_admin.update_user(admin_id, role=Role.MANAGER)
 
 
 # ---------------------------------------------------------------- passwords

@@ -1,4 +1,8 @@
-"""Product master: create, edit, search, barcode labels, CSV import and export."""
+"""Product master: create, edit, search, barcode labels, CSV import and export.
+
+The list and the create/edit form are two pages of one screen; see
+`smartpos.ui.widgets.form_page` for why there is no dialog here.
+"""
 
 from __future__ import annotations
 
@@ -10,17 +14,15 @@ from PyQt5.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
     QComboBox,
-    QDialog,
-    QDialogButtonBox,
     QDoubleSpinBox,
     QFileDialog,
-    QFormLayout,
     QHBoxLayout,
     QHeaderView,
     QLabel,
     QLineEdit,
     QMessageBox,
     QPushButton,
+    QStackedWidget,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -34,6 +36,9 @@ from smartpos.models.product import Product
 from smartpos.services.auth_service import AuthService
 from smartpos.services.category_service import CategoryService
 from smartpos.services.product_service import ProductService
+from smartpos.ui.widgets.form_page import (
+    PAGE_FORM, PAGE_LIST, FormCard, FormPage,
+)
 
 log = get_logger(__name__)
 
@@ -42,107 +47,21 @@ COLUMNS = ["SKU", "Name", "Category", "Unit", "Cost", "Price", "Tax %",
 MONEY_COLUMNS = {4, 5, 6, 7}
 
 
-class ProductEditor(QDialog):
-    """Create or edit one product."""
-
-    def __init__(self, parent=None, product: Product | None = None,
-                 categories=None, units=None) -> None:
-        super().__init__(parent)
-        self.product = product
-        creating = product is None
-        self.setWindowTitle("New product" if creating else f"Edit {product.name}")
-        self.setMinimumWidth(460)
-
-        form = QFormLayout(self)
-        form.setContentsMargins(24, 20, 24, 20)
-        form.setSpacing(10)
-
-        self.sku = QLineEdit(product.sku if product else "")
-        self.sku.setPlaceholderText("RICE-5KG — no spaces")
-        self.sku.setMaxLength(40)
-        form.addRow("SKU", self.sku)
-
-        self.name = QLineEdit(product.name if product else "")
-        self.name.setPlaceholderText("Rice Miniket 5kg")
-        self.name.setMaxLength(160)
-        form.addRow("Name", self.name)
-
-        self.barcode = QLineEdit(product.barcode or "" if product else "")
-        self.barcode.setPlaceholderText("leave blank to generate one")
-        self.barcode.setMaxLength(64)
-        form.addRow("Barcode", self.barcode)
-
-        self.category = QComboBox()
-        self.category.addItem("— none —", None)
-        for cat, depth in categories or []:
-            self.category.addItem(("    " * (depth - 1)) + cat.name, cat.id)
-        if product and product.category_id is not None:
-            index = self.category.findData(product.category_id)
-            if index >= 0:
-                self.category.setCurrentIndex(index)
-        form.addRow("Category", self.category)
-
-        self.unit = QComboBox()
-        self.unit.addItem("— none —", None)
-        for unit in units or []:
-            self.unit.addItem(f"{unit.name} ({unit.short_name})", unit.id)
-        if product and product.unit_id is not None:
-            index = self.unit.findData(product.unit_id)
-            if index >= 0:
-                self.unit.setCurrentIndex(index)
-        form.addRow("Unit", self.unit)
-
-        symbol = get_settings().currency_symbol
-        self.purchase_price = self._money_box(product.purchase_price if product else 0)
-        form.addRow(f"Cost ({symbol})", self.purchase_price)
-        self.sale_price = self._money_box(product.sale_price if product else 0)
-        form.addRow(f"Price ({symbol})", self.sale_price)
-
-        self.tax_rate = self._money_box(product.tax_rate if product else 0, maximum=999.99)
-        self.tax_rate.setSuffix(" %")
-        form.addRow("Tax rate", self.tax_rate)
-
-        self.reorder_level = self._money_box(
-            product.reorder_level if product else 0, decimals=3)
-        form.addRow("Reorder at", self.reorder_level)
-
-        hint = QLabel("Cost is what you pay; price is what the customer pays. "
-                      "A sale records the cost of the day it happened.")
-        hint.setObjectName("hintLabel")
-        hint.setWordWrap(True)
-        form.addRow("", hint)
-
-        buttons = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
-        buttons.accepted.connect(self.accept)
-        buttons.rejected.connect(self.reject)
-        form.addRow(buttons)
-
-    @staticmethod
-    def _money_box(value, decimals: int = 2, maximum: float = 99_999_999.0) -> QDoubleSpinBox:
-        box = QDoubleSpinBox()
-        box.setDecimals(decimals)
-        box.setMaximum(maximum)
-        box.setGroupSeparatorShown(True)
-        box.setValue(float(value or 0))
-        box.setMinimumHeight(30)
-        return box
-
-    def values(self) -> dict:
-        return {
-            "sku": self.sku.text().strip(),
-            "name": self.name.text().strip(),
-            "barcode": self.barcode.text().strip(),
-            "category_id": self.category.currentData(),
-            "unit_id": self.unit.currentData(),
-            "purchase_price": Decimal(str(self.purchase_price.value())),
-            "sale_price": Decimal(str(self.sale_price.value())),
-            "tax_rate": Decimal(str(self.tax_rate.value())),
-            "reorder_level": Decimal(str(self.reorder_level.value())),
-        }
+def _money_box(decimals: int = 2, maximum: float = 99_999_999.0) -> QDoubleSpinBox:
+    box = QDoubleSpinBox()
+    box.setDecimals(decimals)
+    box.setMaximum(maximum)
+    box.setGroupSeparatorShown(True)
+    box.setMinimumHeight(30)
+    return box
 
 
 class ProductView(QWidget):
-    """Product master: create, edit, search, barcode labels, CSV import and export."""
+    """Product master: create, edit, search, barcode labels, CSV import and export.
+
+The list and the create/edit form are two pages of one screen; see
+`smartpos.ui.widgets.form_page` for why there is no dialog here.
+"""
 
     def __init__(self, auth: AuthService, parent=None) -> None:
         super().__init__(parent)
@@ -151,13 +70,28 @@ class ProductView(QWidget):
         self._categories = CategoryService(auth)
         self._products: list[Product] = []
 
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(24, 22, 24, 22)
-        layout.setSpacing(14)
+        self._editing: Product | None = None
 
-        heading = QLabel("Products")
-        heading.setObjectName("viewHeading")
-        layout.addWidget(heading)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(24, 22, 24, 22)
+        outer.setSpacing(14)
+
+        self.heading = QLabel("Products")
+        self.heading.setObjectName("viewHeading")
+        outer.addWidget(self.heading)
+
+        self.pages = QStackedWidget()
+        self.pages.addWidget(self._build_list(auth))     # PAGE_LIST
+        self.pages.addWidget(self._build_form())         # PAGE_FORM
+        outer.addWidget(self.pages, 1)
+
+    # -------------------------------------------------------- the list page
+
+    def _build_list(self, auth: AuthService) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(12)
 
         bar = QHBoxLayout()
         bar.setSpacing(8)
@@ -233,6 +167,43 @@ class ProductView(QWidget):
             b.setVisible(writable)
 
         self._load_categories()
+        return page
+
+    # -------------------------------------------------------- the form page
+
+    def _build_form(self) -> QWidget:
+        card = FormCard(save_text="Save product")
+        self.card = card
+        symbol = get_settings().currency_symbol
+
+        self.f_sku = card.add_row("SKU", QLineEdit())
+        self.f_sku.setPlaceholderText("RICE-5KG \u2014 no spaces")
+        self.f_sku.setMaxLength(40)
+
+        self.f_name = card.add_row("Name", QLineEdit())
+        self.f_name.setPlaceholderText("Rice Miniket 5kg")
+        self.f_name.setMaxLength(160)
+
+        self.f_barcode = card.add_row("Barcode", QLineEdit())
+        self.f_barcode.setPlaceholderText("leave blank to generate one")
+        self.f_barcode.setMaxLength(64)
+
+        self.f_category = card.add_row("Category", QComboBox())
+        self.f_unit = card.add_row("Unit", QComboBox())
+
+        self.f_cost = card.add_row(f"Cost ({symbol})", _money_box())
+        self.f_price = card.add_row(f"Price ({symbol})", _money_box())
+        self.f_tax = card.add_row("Tax rate", _money_box(maximum=999.99))
+        self.f_tax.setSuffix(" %")
+        self.f_reorder = card.add_row("Reorder at", _money_box(decimals=3))
+
+        card.set_hint("Cost is what you pay; price is what the customer pays. "
+                      "A sale records the cost of the day it happened.")
+        card.save_clicked.connect(self._save)
+        card.cancel_clicked.connect(self._close_form)
+        for field in (self.f_sku, self.f_name, self.f_barcode):
+            field.returnPressed.connect(self._save)
+        return FormPage(card)
 
     # ------------------------------------------------------------- helpers
 
@@ -318,38 +289,99 @@ class ProductView(QWidget):
             log.exception("Could not load categories or units")
             return [], []
 
-    def _create(self) -> None:
+    # --- the form -------------------------------------------------------
+
+    def _open_form(self, product: Product | None) -> None:
+        self._editing = product
         categories, units = self._editor_lists()
-        dialog = ProductEditor(self, None, categories, units)
-        if dialog.exec_() != QDialog.Accepted:
-            return
-        v = dialog.values()
-        try:
-            self._service.create(
-                v["sku"], v["name"], barcode=v["barcode"] or None,
-                category_id=v["category_id"], unit_id=v["unit_id"],
-                purchase_price=v["purchase_price"], sale_price=v["sale_price"],
-                tax_rate=v["tax_rate"], reorder_level=v["reorder_level"],
-                auto_barcode=not v["barcode"])
-        except Exception as exc:
-            self._report(exc)
-            return
-        self.refresh()
+
+        self.f_category.clear()
+        self.f_category.addItem("\u2014 none \u2014", None)
+        for cat, depth in categories:
+            self.f_category.addItem(("    " * (depth - 1)) + cat.name, cat.id)
+
+        self.f_unit.clear()
+        self.f_unit.addItem("\u2014 none \u2014", None)
+        for unit in units:
+            self.f_unit.addItem(f"{unit.name} ({unit.short_name})", unit.id)
+
+        if product is None:
+            self.card.set_title("New product")
+            self.heading.setText("Products \u203a New product")
+            self.f_sku.clear()
+            self.f_name.clear()
+            self.f_barcode.clear()
+            self.f_category.setCurrentIndex(0)
+            self.f_unit.setCurrentIndex(0)
+            for box in (self.f_cost, self.f_price, self.f_tax, self.f_reorder):
+                box.setValue(0.0)
+        else:
+            self.card.set_title(f"Edit {product.name}")
+            self.heading.setText(f"Products \u203a {product.sku}")
+            self.f_sku.setText(product.sku)
+            self.f_name.setText(product.name)
+            self.f_barcode.setText(product.barcode or "")
+            for box, data in ((self.f_category, product.category_id),
+                              (self.f_unit, product.unit_id)):
+                index = box.findData(data) if data is not None else 0
+                box.setCurrentIndex(index if index >= 0 else 0)
+            self.f_cost.setValue(float(product.purchase_price or 0))
+            self.f_price.setValue(float(product.sale_price or 0))
+            self.f_tax.setValue(float(product.tax_rate or 0))
+            self.f_reorder.setValue(float(product.reorder_level or 0))
+
+        self.pages.setCurrentIndex(PAGE_FORM)
+        self.f_sku.setFocus()
+        self.f_sku.selectAll()
+
+    def _close_form(self) -> None:
+        self._editing = None
+        self.heading.setText("Products")
+        self.pages.setCurrentIndex(PAGE_LIST)
+        self.table.setFocus()
+
+    def _form_values(self) -> dict:
+        return {
+            "sku": self.f_sku.text().strip(),
+            "name": self.f_name.text().strip(),
+            "barcode": self.f_barcode.text().strip(),
+            "category_id": self.f_category.currentData(),
+            "unit_id": self.f_unit.currentData(),
+            "purchase_price": Decimal(str(self.f_cost.value())),
+            "sale_price": Decimal(str(self.f_price.value())),
+            "tax_rate": Decimal(str(self.f_tax.value())),
+            "reorder_level": Decimal(str(self.f_reorder.value())),
+        }
+
+    def _create(self) -> None:
+        self._open_form(None)
 
     def _edit(self) -> None:
         chosen = self._selected()
-        if len(chosen) != 1:
-            return
-        product = chosen[0]
-        categories, units = self._editor_lists()
-        dialog = ProductEditor(self, product, categories, units)
-        if dialog.exec_() != QDialog.Accepted:
-            return
+        if len(chosen) == 1:
+            self._open_form(chosen[0])
+
+    def _save(self) -> None:
+        v = self._form_values()
+        self.card.set_busy(True)
         try:
-            self._service.update(product.id, **dialog.values())
+            if self._editing is None:
+                self._service.create(
+                    v["sku"], v["name"], barcode=v["barcode"] or None,
+                    category_id=v["category_id"], unit_id=v["unit_id"],
+                    purchase_price=v["purchase_price"], sale_price=v["sale_price"],
+                    tax_rate=v["tax_rate"], reorder_level=v["reorder_level"],
+                    auto_barcode=not v["barcode"])
+            else:
+                self._service.update(self._editing.id, **v)
         except Exception as exc:
+            # Stay on the form: a rejected SKU should be fixable in place.
             self._report(exc)
             return
+        finally:
+            self.card.set_busy(False)
+
+        self._close_form()
         self.refresh()
 
     def _generate_barcode(self) -> None:

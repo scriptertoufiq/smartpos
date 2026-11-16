@@ -1,4 +1,11 @@
-"""Shop profile, currency, tax rate, invoice footer and backup."""
+"""Shop profile, currency, tax rate and invoice footer.
+
+Backup and restore are deliberately not on this screen. A restore replaces
+every row in the database, and a button that does it sitting next to the shop's
+phone number is an accident waiting to happen. The capability is unchanged and
+runs from `scripts/backup.py`, where reaching for it is a decision rather than a
+stray click.
+"""
 
 from __future__ import annotations
 
@@ -6,74 +13,30 @@ from pathlib import Path
 
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import (
-    QAbstractItemView, QDialog, QDialogButtonBox, QFileDialog, QFormLayout,
-    QFrame, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMessageBox,
-    QPushButton, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
+    QFileDialog, QFormLayout, QFrame, QHBoxLayout, QLabel, QLineEdit,
+    QMessageBox, QPushButton, QVBoxLayout, QWidget,
 )
 
 from smartpos.core.exceptions import SmartPOSError
 from smartpos.core.logging import get_logger
 from smartpos.services.auth_service import AuthService
-from smartpos.services.backup_service import CONFIRMATION, BackupService
 from smartpos.services.settings_service import FIELDS, SettingsService
 
 log = get_logger(__name__)
 
-BACKUP_COLUMNS = ["File", "Taken", "Size (KB)"]
-
-
-class RestoreDialog(QDialog):
-    """Make the person type the word. A click is too easy to make by accident."""
-
-    def __init__(self, parent, name: str):
-        super().__init__(parent)
-        self.setWindowTitle("Restore from backup")
-        self.setMinimumWidth(440)
-
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(24, 20, 24, 20)
-        layout.setSpacing(10)
-
-        warning = QLabel(
-            f"<b>This replaces every row in the database</b> with the contents "
-            f"of {name}.<br><br>Anything recorded since that backup was taken "
-            f"will be gone: sales, stock, payments, all of it.<br><br>"
-            f"A copy of the current database is saved first, so this can itself "
-            f"be undone.")
-        warning.setWordWrap(True)
-        warning.setObjectName("loginError")
-        layout.addWidget(warning)
-
-        layout.addWidget(QLabel(f"Type <b>{CONFIRMATION}</b> to continue:"))
-        self.confirmation = QLineEdit()
-        self.confirmation.setMinimumHeight(34)
-        layout.addWidget(self.confirmation)
-
-        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
-        self._ok = buttons.button(QDialogButtonBox.Ok)
-        self._ok.setText("Restore")
-        self._ok.setEnabled(False)
-        buttons.accepted.connect(self.accept)
-        buttons.rejected.connect(self.reject)
-        layout.addWidget(buttons)
-
-        self.confirmation.textChanged.connect(
-            lambda text: self._ok.setEnabled(text == CONFIRMATION))
-
-    def value(self) -> str:
-        return self.confirmation.text()
+# A settings form stretched across a maximised window is unreadable; the
+# fields sit in a column of a sensible width instead.
+CARD_WIDTH = 620
 
 
 class SettingsView(QWidget):
-    """Shop profile, currency, tax rate, invoice footer and backup."""
+    """Shop profile, currency, tax rate and invoice footer."""
 
     def __init__(self, auth: AuthService, parent=None) -> None:
         super().__init__(parent)
         self._auth = auth
         self._settings = SettingsService(auth)
-        self._backup = BackupService(auth)
         self._inputs: dict[str, QLineEdit] = {}
-        self._backups: list[dict] = []
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(24, 22, 24, 22)
@@ -83,11 +46,10 @@ class SettingsView(QWidget):
         heading.setObjectName("viewHeading")
         layout.addWidget(heading)
 
-        body = QHBoxLayout()
-        body.setSpacing(16)
-        body.addWidget(self._build_profile(), 1)
-        body.addWidget(self._build_backup(), 1)
-        layout.addLayout(body)
+        row = QHBoxLayout()
+        row.addWidget(self._build_profile())
+        row.addStretch(1)
+        layout.addLayout(row)
         layout.addStretch(1)
 
         self.status = QLabel("")
@@ -100,8 +62,9 @@ class SettingsView(QWidget):
     def _build_profile(self) -> QWidget:
         card = QFrame()
         card.setObjectName("panelCard")
+        card.setMaximumWidth(CARD_WIDTH)
         layout = QVBoxLayout(card)
-        layout.setContentsMargins(16, 14, 16, 14)
+        layout.setContentsMargins(18, 16, 18, 16)
         layout.setSpacing(8)
 
         title = QLabel("Shop profile")
@@ -116,18 +79,25 @@ class SettingsView(QWidget):
 
         form = QFormLayout()
         form.setSpacing(8)
+        # Left-aligned: these labels vary from 'Phone' to 'Lock the screen
+        # after (minutes)', and right-aligning them leaves a ragged edge.
+        form.setLabelAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        form.setFormAlignment(Qt.AlignLeft | Qt.AlignTop)
+        form.setHorizontalSpacing(14)
         for key, (label, _default) in FIELDS.items():
             field = QLineEdit()
             field.setMinimumHeight(30)
             if key == "shop_logo":
-                row = QHBoxLayout()
-                row.setSpacing(6)
-                row.addWidget(field, 1)
+                picker = QHBoxLayout()
+                picker.setSpacing(6)
+                picker.addWidget(field, 1)
                 browse = QPushButton("Browse…")
+                browse.setMinimumWidth(92)        # it was squeezed to "Krowse"
+                browse.setMinimumHeight(30)
                 browse.clicked.connect(self._pick_logo)
-                row.addWidget(browse)
+                picker.addWidget(browse, 0)
                 holder = QWidget()
-                holder.setLayout(row)
+                holder.setLayout(picker)
                 form.addRow(label, holder)
             else:
                 form.addRow(label, field)
@@ -155,57 +125,6 @@ class SettingsView(QWidget):
             field.setReadOnly(not writable)
         return card
 
-    def _build_backup(self) -> QWidget:
-        card = QFrame()
-        card.setObjectName("panelCard")
-        layout = QVBoxLayout(card)
-        layout.setContentsMargins(16, 14, 16, 14)
-        layout.setSpacing(8)
-
-        title = QLabel("Backup and restore")
-        title.setObjectName("panelHeading")
-        layout.addWidget(title)
-
-        self.backup_note = QLabel("")
-        self.backup_note.setObjectName("hintLabel")
-        self.backup_note.setWordWrap(True)
-        layout.addWidget(self.backup_note)
-
-        self.backup_table = QTableWidget(0, len(BACKUP_COLUMNS))
-        self.backup_table.setHorizontalHeaderLabels(BACKUP_COLUMNS)
-        self.backup_table.setSelectionBehavior(QAbstractItemView.SelectRows)
-        self.backup_table.setSelectionMode(QAbstractItemView.SingleSelection)
-        self.backup_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
-        self.backup_table.verticalHeader().setVisible(False)
-        self.backup_table.setAlternatingRowColors(True)
-        self.backup_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
-        layout.addWidget(self.backup_table, 1)
-
-        buttons = QHBoxLayout()
-        buttons.setSpacing(6)
-        self.backup_now = QPushButton("Back up now")
-        self.backup_now.setProperty("primary", True)
-        self.restore_button = QPushButton("Restore…")
-        self.restore_button.setProperty("danger", True)
-        self.delete_button = QPushButton("Delete")
-        for b in (self.backup_now, self.restore_button, self.delete_button):
-            b.setMinimumHeight(32)
-            buttons.addWidget(b)
-        self.restore_button.setEnabled(False)
-        self.delete_button.setEnabled(False)
-        buttons.addStretch(1)
-        layout.addLayout(buttons)
-
-        self.backup_now.clicked.connect(self._create_backup)
-        self.restore_button.clicked.connect(self._restore)
-        self.delete_button.clicked.connect(self._delete)
-        self.backup_table.itemSelectionChanged.connect(self._selection_changed)
-
-        writable = self._auth.can("backup.manage")
-        for b in (self.backup_now, self.restore_button, self.delete_button):
-            b.setVisible(writable)
-        return card
-
     # ------------------------------------------------------------- behaviour
 
     def _report(self, exc: Exception) -> None:
@@ -218,7 +137,7 @@ class SettingsView(QWidget):
                 "The action failed. The details were written to the log file.")
 
     def refresh(self) -> None:
-        """Reload settings and the list of backups."""
+        """Reload the shop profile from the settings table."""
         try:
             values = self._settings.all(refresh=True)
         except Exception as exc:
@@ -226,44 +145,6 @@ class SettingsView(QWidget):
             return
         for key, field in self._inputs.items():
             field.setText(values.get(key, ""))
-
-        self._load_backups()
-
-    def _load_backups(self) -> None:
-        try:
-            self._backups = self._backup.list_backups()
-            folder = self._backup.backup_dir()
-        except Exception as exc:
-            self._report(exc)
-            return
-
-        tool = ("mysqldump" if self._backup.mysqldump_available()
-                else "the application itself (mysqldump is not installed)")
-        self.backup_note.setText(f"Saved in {folder}. Written by {tool}.")
-
-        self.backup_table.setRowCount(len(self._backups))
-        for row, item in enumerate(self._backups):
-            cells = [item["name"],
-                     item["taken_at"].strftime("%d %b %Y, %H:%M"),
-                     f"{item['size_kb']:,.1f}"]
-            for column, text in enumerate(cells):
-                cell = QTableWidgetItem(text)
-                if column == 2:
-                    cell.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
-                self.backup_table.setItem(row, column, cell)
-        self.backup_table.resizeColumnsToContents()
-        self.backup_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
-        self._selection_changed()
-
-    def _selection_changed(self) -> None:
-        chosen = bool(self.backup_table.selectionModel()
-                      and self.backup_table.selectionModel().selectedRows())
-        self.restore_button.setEnabled(chosen)
-        self.delete_button.setEnabled(chosen)
-
-    def _selected(self) -> dict | None:
-        rows = self.backup_table.selectionModel().selectedRows()
-        return self._backups[rows[0].row()] if rows else None
 
     # ---------------------------------------------------------------- actions
 
@@ -283,56 +164,3 @@ class SettingsView(QWidget):
         self.status.setText("Settings saved. They appear on the next invoice.")
         self.status.setStyleSheet("color: #047857;")
         self.refresh()
-
-    def _create_backup(self) -> None:
-        self.backup_now.setEnabled(False)
-        self.backup_now.setText("Backing up…")
-        try:
-            path = self._backup.create_backup()
-        except Exception as exc:
-            self._report(exc)
-            return
-        finally:
-            self.backup_now.setEnabled(True)
-            self.backup_now.setText("Back up now")
-
-        size = path.stat().st_size / 1024
-        self.status.setText(f"Backed up to {path} ({size:,.1f} KB).")
-        self.status.setStyleSheet("color: #047857;")
-        self._load_backups()
-
-    def _restore(self) -> None:
-        chosen = self._selected()
-        if chosen is None:
-            return
-        dialog = RestoreDialog(self, chosen["name"])
-        if dialog.exec_() != QDialog.Accepted:
-            return
-        try:
-            result = self._backup.restore_backup(chosen["path"], dialog.value())
-        except Exception as exc:
-            self._report(exc)
-            return
-
-        QMessageBox.information(
-            self, "Restored",
-            f"{chosen['name']} was restored ({result['statements']} statements).\n\n"
-            f"The database as it was a moment ago is saved at\n"
-            f"{result['safety_copy'].name}\n\n"
-            "Sign out and back in so every screen reloads.")
-        self.refresh()
-
-    def _delete(self) -> None:
-        chosen = self._selected()
-        if chosen is None:
-            return
-        if QMessageBox.question(
-            self, "Delete backup", f"Delete {chosen['name']}?",
-            QMessageBox.Yes | QMessageBox.No, QMessageBox.No) != QMessageBox.Yes:
-            return
-        try:
-            self._backup.delete_backup(chosen["path"])
-        except Exception as exc:
-            self._report(exc)
-            return
-        self._load_backups()

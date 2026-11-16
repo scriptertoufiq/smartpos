@@ -1,4 +1,8 @@
-"""Warehouses and outlets."""
+"""Warehouses and outlets.
+
+The list and the form are two pages of one screen rather than a dialog over the
+top — same shape as the user screen, so the two feel like one application.
+"""
 
 from __future__ import annotations
 
@@ -6,15 +10,15 @@ from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
-    QDialog,
-    QDialogButtonBox,
     QFormLayout,
+    QFrame,
     QHBoxLayout,
     QHeaderView,
     QLabel,
     QLineEdit,
     QMessageBox,
     QPushButton,
+    QStackedWidget,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -30,58 +34,10 @@ from smartpos.services.warehouse_service import WarehouseService
 log = get_logger(__name__)
 
 COLUMNS = ["ID", "Code", "Name", "Address", "Phone", "Status"]
+FORM_WIDTH = 560
 
-
-class WarehouseEditor(QDialog):
-    """Create or edit one outlet."""
-
-    def __init__(self, parent=None, warehouse: Warehouse | None = None) -> None:
-        super().__init__(parent)
-        self.warehouse = warehouse
-        creating = warehouse is None
-        self.setWindowTitle("New outlet" if creating else f"Edit {warehouse.name}")
-        self.setMinimumWidth(420)
-
-        form = QFormLayout(self)
-        form.setContentsMargins(24, 20, 24, 20)
-        form.setSpacing(10)
-
-        self.code = QLineEdit(warehouse.code if warehouse else "")
-        self.code.setPlaceholderText("MAIN, GODOWN — no spaces")
-        self.code.setMaxLength(20)
-        form.addRow("Code", self.code)
-
-        self.name = QLineEdit(warehouse.name if warehouse else "")
-        self.name.setPlaceholderText("Main Outlet")
-        self.name.setMaxLength(120)
-        form.addRow("Name", self.name)
-
-        self.address = QLineEdit(warehouse.address or "" if warehouse else "")
-        self.address.setMaxLength(255)
-        form.addRow("Address", self.address)
-
-        self.phone = QLineEdit(warehouse.phone or "" if warehouse else "")
-        self.phone.setMaxLength(30)
-        form.addRow("Phone", self.phone)
-
-        hint = QLabel("The code is how this outlet is identified on documents. "
-                      "It is stored in capitals.")
-        hint.setObjectName("hintLabel")
-        hint.setWordWrap(True)
-        form.addRow("", hint)
-
-        buttons = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
-        buttons.accepted.connect(self.accept)
-        buttons.rejected.connect(self.reject)
-        form.addRow(buttons)
-
-    def values(self) -> dict:
-        return {
-            "code": self.code.text().strip(),
-            "name": self.name.text().strip(),
-            "address": self.address.text().strip(),
-            "phone": self.phone.text().strip(),
-        }
+PAGE_LIST = 0
+PAGE_FORM = 1
 
 
 class WarehouseView(QWidget):
@@ -92,14 +48,34 @@ class WarehouseView(QWidget):
         self._auth = auth
         self._service = WarehouseService(auth)
         self._warehouses: list[Warehouse] = []
+        self._editing: Warehouse | None = None
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(24, 22, 24, 22)
         layout.setSpacing(14)
 
-        heading = QLabel("Warehouses")
-        heading.setObjectName("viewHeading")
-        layout.addWidget(heading)
+        self.heading = QLabel("Warehouses")
+        self.heading.setObjectName("viewHeading")
+        layout.addWidget(self.heading)
+
+        self.pages = QStackedWidget()
+        self.pages.addWidget(self._build_list())      # PAGE_LIST
+        self.pages.addWidget(self._build_form())      # PAGE_FORM
+        layout.addWidget(self.pages, 1)
+
+        # Read-only roles get the list without the buttons.
+        writable = auth.can("warehouse.manage")
+        self.add_button.setVisible(writable)
+        self.edit_button.setVisible(writable)
+        self.toggle_button.setVisible(writable)
+
+    # -------------------------------------------------------- the list page
+
+    def _build_list(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(12)
 
         blurb = QLabel("Any stock location — the shop floor, a godown, a second "
                        "branch. Outlets are closed, never deleted, so old "
@@ -145,17 +121,90 @@ class WarehouseView(QWidget):
         layout.addLayout(actions)
 
         self.show_closed.toggled.connect(self.refresh)
-        self.add_button.clicked.connect(self._create)
-        self.edit_button.clicked.connect(self._edit)
+        self.add_button.clicked.connect(self._start_create)
+        self.edit_button.clicked.connect(self._start_edit)
         self.toggle_button.clicked.connect(self._toggle)
         self.table.itemSelectionChanged.connect(self._selection_changed)
-        self.table.doubleClicked.connect(self._edit)
+        self.table.doubleClicked.connect(self._start_edit)
+        return page
 
-        # Read-only roles get the list without the buttons.
-        writable = auth.can("warehouse.manage")
-        self.add_button.setVisible(writable)
-        self.edit_button.setVisible(writable)
-        self.toggle_button.setVisible(writable)
+    # -------------------------------------------------------- the form page
+
+    def _build_form(self) -> QWidget:
+        page = QWidget()
+        outer = QVBoxLayout(page)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(12)
+
+        row = QHBoxLayout()
+        card = QFrame()
+        card.setObjectName("panelCard")
+        card.setFixedWidth(FORM_WIDTH)   # a form stretched across the
+        # window is unreadable; it sits in a column of a sensible width
+        row.addWidget(card)
+        row.addStretch(1)
+        outer.addLayout(row)
+        outer.addStretch(1)
+
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(18, 16, 18, 16)
+        layout.setSpacing(10)
+
+        self.form_title = QLabel("New outlet")
+        self.form_title.setObjectName("panelHeading")
+        layout.addWidget(self.form_title)
+
+        form = QFormLayout()
+        form.setSpacing(9)
+        form.setLabelAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        form.setFormAlignment(Qt.AlignLeft | Qt.AlignTop)
+        form.setHorizontalSpacing(14)
+
+        self.f_code = QLineEdit()
+        self.f_code.setPlaceholderText("MAIN, GODOWN — no spaces")
+        self.f_code.setMaxLength(20)
+        self.f_code.setMinimumHeight(30)
+        form.addRow("Code", self.f_code)
+
+        self.f_name = QLineEdit()
+        self.f_name.setPlaceholderText("Main Outlet")
+        self.f_name.setMaxLength(120)
+        self.f_name.setMinimumHeight(30)
+        form.addRow("Name", self.f_name)
+
+        self.f_address = QLineEdit()
+        self.f_address.setMaxLength(255)
+        self.f_address.setMinimumHeight(30)
+        form.addRow("Address", self.f_address)
+
+        self.f_phone = QLineEdit()
+        self.f_phone.setMaxLength(30)
+        self.f_phone.setMinimumHeight(30)
+        form.addRow("Phone", self.f_phone)
+        layout.addLayout(form)
+
+        hint = QLabel("The code is how this outlet is identified on documents. "
+                      "It is stored in capitals.")
+        hint.setObjectName("hintLabel")
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+
+        buttons = QHBoxLayout()
+        buttons.addStretch(1)
+        self.cancel_button = QPushButton("Cancel")
+        self.cancel_button.setMinimumHeight(32)
+        buttons.addWidget(self.cancel_button)
+        self.save_button = QPushButton("Save outlet")
+        self.save_button.setProperty("primary", True)
+        self.save_button.setMinimumHeight(32)
+        buttons.addWidget(self.save_button)
+        layout.addLayout(buttons)
+
+        self.cancel_button.clicked.connect(self._close_form)
+        self.save_button.clicked.connect(self._save)
+        for field in (self.f_code, self.f_name, self.f_address, self.f_phone):
+            field.returnPressed.connect(self._save)
+        return page
 
     # ------------------------------------------------------------- helpers
 
@@ -223,33 +272,65 @@ class WarehouseView(QWidget):
         self.table.horizontalHeader().setSectionResizeMode(3, QHeaderView.Stretch)
         self._selection_changed()
 
-    def _create(self) -> None:
-        dialog = WarehouseEditor(self)
-        if dialog.exec_() != QDialog.Accepted:
-            return
-        v = dialog.values()
+    # --- the form -------------------------------------------------------
+
+    def _open_form(self, warehouse: Warehouse | None) -> None:
+        """Show the form page, filled in for `warehouse` or blank for a new one."""
+        self._editing = warehouse
+        if warehouse is None:
+            self.form_title.setText("New outlet")
+            self.heading.setText("Warehouses › New outlet")
+            self.f_code.clear()
+            self.f_name.clear()
+            self.f_address.clear()
+            self.f_phone.clear()
+        else:
+            self.form_title.setText(f"Edit {warehouse.name}")
+            self.heading.setText(f"Warehouses › {warehouse.code}")
+            self.f_code.setText(warehouse.code)
+            self.f_name.setText(warehouse.name)
+            self.f_address.setText(warehouse.address or "")
+            self.f_phone.setText(warehouse.phone or "")
+
+        self.pages.setCurrentIndex(PAGE_FORM)
+        self.f_code.setFocus()
+
+    def _close_form(self) -> None:
+        self._editing = None
+        self.heading.setText("Warehouses")
+        self.pages.setCurrentIndex(PAGE_LIST)
+        self.table.setFocus()
+
+    def _start_create(self) -> None:
+        self._open_form(None)
+
+    def _start_edit(self) -> None:
+        warehouse = self._selected()
+        if warehouse is not None:
+            self._open_form(warehouse)
+
+    def _save(self) -> None:
+        code = self.f_code.text().strip()
+        name = self.f_name.text().strip()
+        address = self.f_address.text().strip()
+        phone = self.f_phone.text().strip()
+
+        self.save_button.setEnabled(False)
         try:
-            self._service.create(v["code"], v["name"], v["address"], v["phone"])
+            if self._editing is None:
+                self._service.create(code, name, address, phone)
+            else:
+                self._service.update(self._editing.id, code, name, address, phone)
         except Exception as exc:
             self._report(exc)
             return
+        finally:
+            self.save_button.setEnabled(True)
+
+        self._close_form()
         self.refresh()
 
-    def _edit(self) -> None:
-        warehouse = self._selected()
-        if warehouse is None:
-            return
-        dialog = WarehouseEditor(self, warehouse)
-        if dialog.exec_() != QDialog.Accepted:
-            return
-        v = dialog.values()
-        try:
-            self._service.update(warehouse.id, v["code"], v["name"],
-                                 v["address"], v["phone"])
-        except Exception as exc:
-            self._report(exc)
-            return
-        self.refresh()
+    # --- list actions ---------------------------------------------------
 
     def _toggle(self) -> None:
         warehouse = self._selected()

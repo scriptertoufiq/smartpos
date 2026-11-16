@@ -46,18 +46,6 @@ QHeaderView::section {
     font-weight: 600;
 }
 
-/* Primary action button */
-QPushButton[primary="true"] {
-    background: #2563eb;
-    color: #ffffff;
-    border-radius: 4px;
-    padding: 8px 18px;
-    font-weight: 600;
-}
-
-QPushButton[primary="true"]:hover {
-    background: #1d4ed8;
-}
 
 /* ---------------------------------------------------------------- shell */
 #brand {
@@ -142,8 +130,6 @@ QPushButton {
 }
 QPushButton:hover:enabled { background: #f3f4f6; }
 QPushButton:disabled { color: #9ca3af; background: #f9fafb; border-color: #e5e7eb; }
-QPushButton[danger="true"]:enabled { color: #b91c1c; border-color: #fca5a5; }
-QPushButton[danger="true"]:hover:enabled { background: #fee2e2; }
 
 QTableView { border: 1px solid #e5e7eb; border-radius: 4px; }
 QTableView::item { padding: 5px; }
@@ -207,3 +193,110 @@ QStatusBar QLabel { color: #6b7280; font-size: 12px; }
     border: 1px solid #e5e7eb;
     border-radius: 6px;
 }
+
+/* ----------------------------------------------------- button variants
+   These come last and carry an extra pseudo-state on purpose.
+
+   `QPushButton[primary="true"]:hover` and `QPushButton:hover:enabled` have the
+   same specificity under the CSS rules Qt follows (one attribute + one pseudo
+   against two pseudos), so whichever is written later wins. The generic rule
+   was later, and hovering the blue Sign in button turned it pale grey while the
+   text stayed white -- the label vanished.
+
+   Adding `:enabled` makes these variants strictly more specific, so they win on
+   their own merit and not on where they happen to sit in the file. */
+
+QPushButton[primary="true"]:enabled {
+    background: #2563eb;
+    color: #ffffff;
+    border: 1px solid #2563eb;
+    border-radius: 4px;
+    padding: 8px 18px;
+    font-weight: 600;
+}
+QPushButton[primary="true"]:hover:enabled {
+    background: #1d4ed8;
+    border-color: #1d4ed8;
+    color: #ffffff;
+}
+QPushButton[primary="true"]:pressed:enabled {
+    background: #1e40af;
+    border-color: #1e40af;
+    color: #ffffff;
+}
+QPushButton[primary="true"]:focus:enabled {
+    border: 1px solid #1e3a8a;
+}
+QPushButton[primary="true"]:disabled {
+    background: #cbd5e1;
+    border-color: #cbd5e1;
+    color: #ffffff;
+}
+
+QPushButton[danger="true"]:enabled {
+    color: #b91c1c;
+    border-color: #fca5a5;
+    background: #ffffff;
+}
+QPushButton[danger="true"]:hover:enabled {
+    background: #fee2e2;
+    color: #991b1b;
+    border-color: #f87171;
+}
+QPushButton[danger="true"]:pressed:enabled {
+    background: #fecaca;
+}
+
+/* ------------------------------------------------- text that must not vanish
+   Qt gives a plain QLabel its colour from the desktop palette. On a machine in
+   dark mode that is near-white, and these surfaces are hard-coded white -- the
+   text disappears. Every text widget is given an explicit colour so nothing
+   depends on a system setting. (main.py also installs a light palette; this is
+   the belt to that pair of braces.) */
+
+QWidget { color: #111827; }
+QLabel { color: #111827; }
+QCheckBox, QRadioButton, QGroupBox { color: #111827; }
+QFormLayout QLabel { color: #111827; }
+QTableWidget, QTreeWidget, QListWidget { color: #111827; }
+QHeaderView::section { color: #374151; }
+QMenuBar, QMenu { background: #ffffff; color: #111827; }
+QMenu::item:selected { background: #2563eb; color: #ffffff; }
+QToolTip { background: #111827; color: #ffffff; border: none; padding: 4px 8px; }
+QDateEdit, QDoubleSpinBox, QSpinBox {
+    background: #ffffff;
+    color: #111827;
+    border: 1px solid #d1d5db;
+    border-radius: 4px;
+    padding: 4px 8px;
+}
+QSplitter::handle { background: #e5e7eb; }
+
+/* ------------------------------------------- POS product suggestions
+   Drawn over the cart, so it needs a solid background and a real border --
+   anything translucent would show the table rows through the text. */
+#posSuggest {
+    background: #ffffff;
+    border: 1px solid #2563eb;
+    border-top: none;
+    border-radius: 0 0 4px 4px;
+    color: #111827;
+    font-size: 13px;
+    outline: none;
+}
+#posSuggest::item { padding: 7px 10px; border-bottom: 1px solid #f3f4f6; }
+#posSuggest::item:selected { background: #2563eb; color: #ffffff; }
+#posSuggest::item:hover { background: #dbeafe; color: #111827; }
+
+/* --------------------------------------- POS cart quantity stepper */
+#cartStep {
+    background: #f3f4f6;
+    border: 1px solid #d1d5db;
+    border-radius: 3px;
+    padding: 0;
+    font-size: 14px;
+    font-weight: 700;
+    color: #374151;
+}
+#cartStep:hover:enabled { background: #dbeafe; border-color: #2563eb; color: #1d4ed8; }
+#cartStep:pressed:enabled { background: #bfdbfe; }

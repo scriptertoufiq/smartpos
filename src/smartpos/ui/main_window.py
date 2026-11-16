@@ -1,8 +1,15 @@
-"""The main application window.
+"""The main application window -- the only window the application ever has.
 
-Holds the sidebar navigation and a QStackedWidget of the views in
-`smartpos.ui.views`. Which entries appear depends on the signed-in user's role:
-an entry a role cannot use is not disabled, it is not built.
+Holds two pages: the sign-in screen and the application shell (sidebar plus a
+QStackedWidget of the views in `smartpos.ui.views`). Which sidebar entries
+appear depends on the signed-in user's role: an entry a role cannot use is not
+disabled, it is not built.
+
+Signing in and out swaps the page. It deliberately does NOT create or destroy a
+window. The two used to be separate top-level windows, and because a window's
+state is decided by its constructor, every shift change dragged the user back to
+a maximised window -- out of full screen, and on macOS out of its Space. One
+window cannot do that: there is no second window to disagree about the state.
 """
 
 from __future__ import annotations
@@ -11,6 +18,7 @@ from dataclasses import dataclass
 from typing import Callable
 
 from PyQt5.QtCore import Qt
+from PyQt5.QtGui import QKeySequence
 from PyQt5.QtWidgets import (
     QApplication,
     QButtonGroup,
@@ -31,6 +39,7 @@ from smartpos import __app_name__, __version__
 from smartpos.core.logging import get_logger
 from smartpos.services.auth_service import AuthService
 from smartpos.services.warehouse_service import WarehouseService
+from smartpos.ui.login_page import LoginPage
 from smartpos.ui.views.category_view import CategoryView
 from smartpos.ui.views.dashboard_view import DashboardView
 from smartpos.ui.views.customer_view import CustomerView
@@ -131,13 +140,8 @@ class MainWindow(QMainWindow):
         self.auth = auth
         self._views: dict[str, QWidget] = {}
         self._buttons: dict[str, QPushButton] = {}
-        # True when the window closed because someone signed out, as opposed to
-        # quitting the application. The entry point uses it to decide whether to
-        # show the login dialog again -- a counter changes hands all day.
-        self.sign_out_requested = False
 
-        user = auth.current_user()
-        self.setWindowTitle(f"{__app_name__} — {user.full_name if user else ''}")
+        self.setWindowTitle(f"{__app_name__} — Sign in")
         # Open filling the screen: a counter terminal is never a floating
         # window someone resizes. Setting the real geometry before the window is
         # realised means the first frame is already full size -- no resize flash.
@@ -151,10 +155,31 @@ class MainWindow(QMainWindow):
             self.setGeometry(available)
         else:
             self.setMinimumSize(880, 540)
+        # Ask for the full set of window controls rather than trusting the
+        # platform default, so minimise and zoom are always there.
+        self.setWindowFlags(Qt.Window
+                            | Qt.WindowMinimizeButtonHint
+                            | Qt.WindowMaximizeButtonHint
+                            | Qt.WindowCloseButtonHint)
         self.setWindowState(Qt.WindowMaximized)
 
-        central = QWidget()
-        root = QHBoxLayout(central)
+        # Page 0 signs in, page 1 is the application. The window itself never
+        # changes, whichever one is showing.
+        self.pages = QStackedWidget()
+        self.login_page = LoginPage(auth)
+        self.login_page.signed_in.connect(self._on_signed_in)
+        self.pages.addWidget(self.login_page)
+        self.pages.addWidget(self._build_shell())
+        self.setCentralWidget(self.pages)
+
+        self._build_status_bar()
+        self._build_window_menu()
+        self._show_login()
+
+    def _build_shell(self) -> QWidget:
+        """Sidebar plus the stack of views."""
+        shell = QWidget()
+        root = QHBoxLayout(shell)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
 
@@ -163,10 +188,40 @@ class MainWindow(QMainWindow):
         self.stack = QStackedWidget()
         self.stack.setObjectName("contentStack")
         root.addWidget(self.stack, 1)
+        return shell
 
-        self.setCentralWidget(central)
-        self._build_status_bar()
-        self.build_navigation()
+    def _build_window_menu(self) -> None:
+        """Minimise, zoom and full screen, from the menu bar or the keyboard."""
+        menu = self.menuBar().addMenu("&Window")
+
+        minimise = menu.addAction("Minimise")
+        minimise.setShortcut(QKeySequence("Ctrl+M"))
+        minimise.triggered.connect(self.showMinimized)
+
+        self._zoom_action = menu.addAction("Zoom")
+        self._zoom_action.setShortcut(QKeySequence(Qt.Key_F11))
+        self._zoom_action.triggered.connect(self._toggle_maximised)
+
+        full_screen = menu.addAction("Full screen")
+        full_screen.setShortcut(QKeySequence("Ctrl+Shift+F"))
+        full_screen.setCheckable(True)
+        full_screen.triggered.connect(self._toggle_full_screen)
+        self._full_screen_action = full_screen
+
+        menu.addSeparator()
+        self._sign_out_action = menu.addAction("Sign out")
+        self._sign_out_action.triggered.connect(self._sign_out)
+
+    def _toggle_maximised(self) -> None:
+        self.showNormal() if self.isMaximized() else self.showMaximized()
+
+    def _toggle_full_screen(self, checked: bool) -> None:
+        """Kiosk mode for a dedicated terminal. Escapable, deliberately:
+        the same shortcut and the menu item both bring it back."""
+        if checked:
+            self.showFullScreen()
+        else:
+            self.showMaximized()
 
     # ------------------------------------------------------------- building
 
@@ -195,11 +250,10 @@ class MainWindow(QMainWindow):
         rule.setObjectName("sidebarRule")
         layout.addWidget(rule)
 
-        user = self.auth.current_user()
-        who = QLabel(f"{user.username}\n{user.role.value.capitalize()}" if user else "")
-        who.setObjectName("sidebarUser")
-        who.setContentsMargins(18, 10, 18, 8)
-        layout.addWidget(who)
+        self._who = QLabel("")
+        self._who.setObjectName("sidebarUser")
+        self._who.setContentsMargins(18, 10, 18, 8)
+        layout.addWidget(self._who)
 
         sign_out = QPushButton("Sign out")
         sign_out.setObjectName("signOut")
@@ -211,7 +265,12 @@ class MainWindow(QMainWindow):
         return sidebar
 
     def build_navigation(self) -> None:
-        """Create the sidebar, hiding entries the current role cannot use."""
+        """Create the sidebar, hiding entries the current role cannot use.
+
+        Runs again on every sign-in, so it clears what the previous user left
+        behind -- the next person on the counter may hold a different role.
+        """
+        self._clear_navigation()
         first_key: str | None = None
         for entry in NAVIGATION:
             if entry.permission and not self.auth.can(entry.permission):
@@ -232,6 +291,19 @@ class MainWindow(QMainWindow):
             self.show_view(first_key)
         else:
             log.warning("Signed-in user has no permitted screens")
+
+    def _clear_navigation(self) -> None:
+        """Forget the previous session's buttons and the views they opened."""
+        for button in self._buttons.values():
+            self._nav_group.removeButton(button)
+            self._nav_layout.removeWidget(button)
+            button.deleteLater()
+        self._buttons.clear()
+
+        for view in self._views.values():
+            self.stack.removeWidget(view)
+            view.deleteLater()
+        self._views.clear()
 
     def _build_status_bar(self) -> None:
         bar = QStatusBar()
@@ -325,12 +397,39 @@ class MainWindow(QMainWindow):
         if button is not None:
             button.setChecked(True)
 
+    # ---------------------------------------------------- signing in and out
+
+    def _show_login(self) -> None:
+        """Put the sign-in page up and strip the window back to it.
+
+        The sidebar and the outlet picker belong to a session, so they go; the
+        window's size, position and full-screen state are not touched, because
+        those belong to the person using it.
+        """
+        self.setWindowTitle(f"{__app_name__} \u2014 Sign in")
+        self.statusBar().setVisible(False)
+        self._sign_out_action.setEnabled(False)
+        self.pages.setCurrentWidget(self.login_page)
+        self.login_page.reset()
+
+    def _on_signed_in(self, user) -> None:
+        """Swap to the application shell for the user who just signed in."""
+        self.setWindowTitle(f"{__app_name__} \u2014 {user.full_name}")
+        self._who.setText(f"{user.username}\n{user.role.value.capitalize()}")
+        self._load_warehouses()
+        self.build_navigation()
+        self.statusBar().setVisible(True)
+        self._sign_out_action.setEnabled(True)
+        self.pages.setCurrentIndex(1)
+        log.info("Signed in as %s", user.username)
+
     def _sign_out(self) -> None:
         if QMessageBox.question(
             self, "Sign out", "Sign out of SmartPOS?",
             QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
         ) != QMessageBox.Yes:
             return
-        self.sign_out_requested = True
         self.auth.logout()
-        self.close()
+        self._clear_navigation()
+        self._show_login()
+        log.info("Signed out; back to the sign-in page")

@@ -1,4 +1,9 @@
-"""Stock on hand per warehouse, transfers, adjustments and the ledger."""
+"""Stock on hand per warehouse, transfers, adjustments and the ledger.
+
+The levels list, the adjustment form and the transfer form are three pages of
+one screen; see `smartpos.ui.widgets.form_page` for why there are no dialogs
+here.
+"""
 
 from __future__ import annotations
 
@@ -6,10 +11,9 @@ from decimal import Decimal
 
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import (
-    QAbstractItemView, QCheckBox, QComboBox, QDialog, QDialogButtonBox,
-    QDoubleSpinBox, QFormLayout, QHBoxLayout, QHeaderView, QLabel, QLineEdit,
-    QMessageBox, QPushButton, QSplitter, QTableWidget, QTableWidgetItem,
-    QVBoxLayout, QWidget,
+    QAbstractItemView, QCheckBox, QComboBox, QDoubleSpinBox, QHBoxLayout,
+    QHeaderView, QLabel, QLineEdit, QMessageBox, QPushButton, QSplitter,
+    QStackedWidget, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
 from smartpos.core.exceptions import SmartPOSError
@@ -18,126 +22,16 @@ from smartpos.services.auth_service import AuthService
 from smartpos.services.product_service import ProductService
 from smartpos.services.stock_service import StockService
 from smartpos.services.warehouse_service import WarehouseService
+from smartpos.ui.widgets.form_page import FormCard, FormPage
 
 log = get_logger(__name__)
 
 LEVEL_COLUMNS = ["SKU", "Product", "Outlet", "On hand", "Unit", "Reorder at", "State"]
 LEDGER_COLUMNS = ["When", "Outlet", "Movement", "Change", "Balance", "Document", "By"]
 
-
-class AdjustDialog(QDialog):
-    """Correct a level after a physical count."""
-
-    def __init__(self, parent, product_name: str, outlet: str, current: Decimal):
-        super().__init__(parent)
-        self.setWindowTitle("Adjust stock")
-        self.setMinimumWidth(400)
-        form = QFormLayout(self)
-        form.setContentsMargins(24, 20, 24, 20)
-        form.setSpacing(10)
-
-        form.addRow("Product", QLabel(product_name))
-        form.addRow("Outlet", QLabel(outlet))
-        form.addRow("System says", QLabel(f"{current:,.3f}"))
-
-        self.counted = QDoubleSpinBox()
-        self.counted.setDecimals(3)
-        self.counted.setMaximum(9_999_999.0)
-        self.counted.setValue(float(current))
-        self.counted.setMinimumHeight(32)
-        form.addRow("Actually counted", self.counted)
-
-        self.reason = QLineEdit()
-        self.reason.setPlaceholderText("3 packets damaged in transit")
-        self.reason.setMaxLength(255)
-        form.addRow("Reason", self.reason)
-
-        hint = QLabel("The difference is written to the ledger, not the new "
-                      "total — so the correction itself is on record.")
-        hint.setObjectName("hintLabel")
-        hint.setWordWrap(True)
-        form.addRow("", hint)
-
-        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
-        buttons.accepted.connect(self._check)
-        buttons.rejected.connect(self.reject)
-        form.addRow(buttons)
-
-    def _check(self) -> None:
-        if not self.reason.text().strip():
-            QMessageBox.warning(self, "Reason needed",
-                                "An adjustment must say why.")
-            return
-        self.accept()
-
-    def values(self) -> dict:
-        return {"quantity": Decimal(str(self.counted.value())),
-                "reason": self.reason.text().strip()}
-
-
-class TransferDialog(QDialog):
-    """Move one product between two outlets."""
-
-    def __init__(self, parent, warehouses, products, default_from=None):
-        super().__init__(parent)
-        self.setWindowTitle("Transfer stock")
-        self.setMinimumWidth(420)
-        form = QFormLayout(self)
-        form.setContentsMargins(24, 20, 24, 20)
-        form.setSpacing(10)
-
-        self.product = QComboBox()
-        for p in products:
-            self.product.addItem(f"{p.name} ({p.sku})", p.id)
-        form.addRow("Product", self.product)
-
-        self.source = QComboBox()
-        self.destination = QComboBox()
-        for w in warehouses:
-            self.source.addItem(w.name, w.id)
-            self.destination.addItem(w.name, w.id)
-        if default_from is not None:
-            index = self.source.findData(default_from)
-            if index >= 0:
-                self.source.setCurrentIndex(index)
-        if self.destination.count() > 1:
-            self.destination.setCurrentIndex(
-                1 if self.source.currentIndex() == 0 else 0)
-        form.addRow("From", self.source)
-        form.addRow("To", self.destination)
-
-        self.quantity = QDoubleSpinBox()
-        self.quantity.setDecimals(3)
-        self.quantity.setMaximum(9_999_999.0)
-        self.quantity.setMinimumHeight(32)
-        form.addRow("Quantity", self.quantity)
-
-        self.note = QLineEdit()
-        self.note.setMaxLength(255)
-        form.addRow("Note", self.note)
-
-        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
-        buttons.accepted.connect(self._check)
-        buttons.rejected.connect(self.reject)
-        form.addRow(buttons)
-
-    def _check(self) -> None:
-        if self.source.currentData() == self.destination.currentData():
-            QMessageBox.warning(self, "Same outlet",
-                                "Choose two different outlets.")
-            return
-        if self.quantity.value() <= 0:
-            QMessageBox.warning(self, "Nothing to move",
-                                "Enter a quantity greater than zero.")
-            return
-        self.accept()
-
-    def values(self) -> dict:
-        return {"product_id": self.product.currentData(),
-                "from_id": self.source.currentData(),
-                "to_id": self.destination.currentData(),
-                "quantity": Decimal(str(self.quantity.value())),
-                "note": self.note.text().strip()}
+PAGE_LEVELS = 0
+PAGE_ADJUST = 1
+PAGE_TRANSFER = 2
 
 
 class StockView(QWidget):
@@ -151,13 +45,29 @@ class StockView(QWidget):
         self._products = ProductService(auth)
         self._levels: list[dict] = []
 
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(24, 22, 24, 22)
-        layout.setSpacing(12)
+        self._adjusting: dict | None = None
 
-        heading = QLabel("Stock")
-        heading.setObjectName("viewHeading")
-        layout.addWidget(heading)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(24, 22, 24, 22)
+        outer.setSpacing(12)
+
+        self.heading = QLabel("Stock")
+        self.heading.setObjectName("viewHeading")
+        outer.addWidget(self.heading)
+
+        self.pages = QStackedWidget()
+        self.pages.addWidget(self._build_list(auth))       # PAGE_LEVELS
+        self.pages.addWidget(self._build_adjust())         # PAGE_ADJUST
+        self.pages.addWidget(self._build_transfer())       # PAGE_TRANSFER
+        outer.addWidget(self.pages, 1)
+
+    # ------------------------------------------------------- the levels page
+
+    def _build_list(self, auth: AuthService) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(10)
 
         blurb = QLabel("What is on the shelves, and why. Every figure here is "
                        "explained by the ledger below it.")
@@ -237,6 +147,62 @@ class StockView(QWidget):
         self.adjust_button.setVisible(writable)
         self.transfer_button.setVisible(writable)
         self._load_outlets()
+        return page
+
+    # ------------------------------------------------------ the two form pages
+
+    def _build_adjust(self) -> QWidget:
+        card = FormCard(save_text="Record adjustment")
+        self.adjust_card = card
+
+        self.a_product = card.add_row("Product", QLabel(""))
+        self.a_outlet = card.add_row("Outlet", QLabel(""))
+        self.a_current = card.add_row("System says", QLabel(""))
+
+        self.a_counted = QDoubleSpinBox()
+        self.a_counted.setDecimals(3)
+        self.a_counted.setMaximum(9_999_999.0)
+        card.add_row("Actually counted", self.a_counted)
+
+        self.a_reason = card.add_row("Reason", QLineEdit())
+        self.a_reason.setPlaceholderText("3 packets damaged in transit")
+        self.a_reason.setMaxLength(255)
+
+        card.set_hint("The difference is written to the ledger, not the new "
+                      "total \u2014 so the correction itself is on record.")
+        card.save_clicked.connect(self._save_adjustment)
+        card.cancel_clicked.connect(self._close_form)
+        self.a_reason.returnPressed.connect(self._save_adjustment)
+        return FormPage(card)
+
+    def _build_transfer(self) -> QWidget:
+        card = FormCard(save_text="Move the stock")
+        self.transfer_card = card
+
+        self.t_product = card.add_row("Product", QComboBox())
+        self.t_source = card.add_row("From", QComboBox())
+        self.t_destination = card.add_row("To", QComboBox())
+
+        self.t_quantity = QDoubleSpinBox()
+        self.t_quantity.setDecimals(3)
+        self.t_quantity.setMaximum(9_999_999.0)
+        card.add_row("Quantity", self.t_quantity)
+
+        self.t_note = card.add_row("Note", QLineEdit())
+        self.t_note.setMaxLength(255)
+
+        card.set_hint("Both outlets' levels move in one transaction, so the "
+                      "total on hand never changes.")
+        card.save_clicked.connect(self._save_transfer)
+        card.cancel_clicked.connect(self._close_form)
+        self.t_note.returnPressed.connect(self._save_transfer)
+        return FormPage(card)
+
+    def _close_form(self) -> None:
+        self._adjusting = None
+        self.heading.setText("Stock")
+        self.pages.setCurrentIndex(PAGE_LEVELS)
+        self.table.setFocus()
 
     # ------------------------------------------------------------- helpers
 
@@ -356,22 +322,51 @@ class StockView(QWidget):
                 self.ledger.setItem(r, c, item)
         self.ledger.resizeColumnsToContents()
 
+    # --- adjusting ------------------------------------------------------
+
     def _adjust(self) -> None:
         level = self._selected()
         if level is None:
             return
-        dialog = AdjustDialog(self, level["product_name"], level["warehouse_name"],
-                              Decimal(str(level["quantity"])))
-        if dialog.exec_() != QDialog.Accepted:
+        self._adjusting = level
+        current = Decimal(str(level["quantity"]))
+
+        self.adjust_card.set_title(f"Adjust {level['product_name']}")
+        self.heading.setText(f"Stock \u203a Adjust {level['product_name']}")
+        self.a_product.setText(level["product_name"])
+        self.a_outlet.setText(level["warehouse_name"])
+        self.a_current.setText(f"{current:,.3f}")
+        self.a_counted.setValue(float(current))
+        self.a_reason.clear()
+
+        self.pages.setCurrentIndex(PAGE_ADJUST)
+        self.a_counted.setFocus()
+        self.a_counted.selectAll()
+
+    def _save_adjustment(self) -> None:
+        level = self._adjusting
+        if level is None:
             return
-        v = dialog.values()
+        reason = self.a_reason.text().strip()
+        if not reason:
+            QMessageBox.warning(self, "Reason needed", "An adjustment must say why.")
+            self.a_reason.setFocus()
+            return
+
+        self.adjust_card.set_busy(True)
         try:
             self._stock.adjust(level["product_id"], level["warehouse_id"],
-                               v["quantity"], v["reason"])
+                               Decimal(str(self.a_counted.value())), reason)
         except Exception as exc:
             self._report(exc)
             return
+        finally:
+            self.adjust_card.set_busy(False)
+
+        self._close_form()
         self.refresh()
+
+    # --- transferring ---------------------------------------------------
 
     def _transfer(self) -> None:
         try:
@@ -391,14 +386,54 @@ class StockView(QWidget):
                                     "Add a product before transferring stock.")
             return
 
-        dialog = TransferDialog(self, warehouses, products, self.outlet.currentData())
-        if dialog.exec_() != QDialog.Accepted:
+        self.t_product.clear()
+        for product in products:
+            self.t_product.addItem(f"{product.name} ({product.sku})", product.id)
+
+        self.t_source.clear()
+        self.t_destination.clear()
+        for warehouse in warehouses:
+            self.t_source.addItem(warehouse.name, warehouse.id)
+            self.t_destination.addItem(warehouse.name, warehouse.id)
+        index = self.t_source.findData(self.outlet.currentData())
+        if index >= 0:
+            self.t_source.setCurrentIndex(index)
+        # Default the destination to anywhere but the source, so the first
+        # thing the form shows is already a legal transfer.
+        self.t_destination.setCurrentIndex(
+            1 if self.t_source.currentIndex() == 0 else 0)
+
+        self.t_quantity.setValue(0.0)
+        self.t_note.clear()
+        self.transfer_card.set_title("Transfer stock")
+        self.heading.setText("Stock \u203a Transfer")
+        self.pages.setCurrentIndex(PAGE_TRANSFER)
+        self.t_product.setFocus()
+
+    def _save_transfer(self) -> None:
+        if self.t_source.currentData() == self.t_destination.currentData():
+            QMessageBox.warning(self, "Same outlet", "Choose two different outlets.")
             return
-        v = dialog.values()
+        if self.t_quantity.value() <= 0:
+            QMessageBox.warning(self, "Nothing to move",
+                                "Enter a quantity greater than zero.")
+            self.t_quantity.setFocus()
+            return
+
+        self.transfer_card.set_busy(True)
         try:
-            self._stock.transfer(v["from_id"], v["to_id"],
-                                 [(v["product_id"], v["quantity"])], v["note"])
+            self._stock.transfer(
+                self.t_source.currentData(), self.t_destination.currentData(),
+                [(self.t_product.currentData(),
+                  Decimal(str(self.t_quantity.value())))],
+                self.t_note.text().strip())
         except Exception as exc:
+            # Stay on the form: "not enough stock" is fixed by typing a
+            # smaller number, not by starting again.
             self._report(exc)
             return
+        finally:
+            self.transfer_card.set_busy(False)
+
+        self._close_form()
         self.refresh()

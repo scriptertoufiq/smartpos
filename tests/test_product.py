@@ -198,11 +198,21 @@ def test_get_by_barcode_returns_none_for_unknown(svc):
 
 
 def test_search_matches_name_sku_and_barcode(svc):
+    """Each of the three ways in finds the product.
+
+    The name is deliberately unlike anything a real catalogue holds: searching
+    for "soyabean" used to assert on the FIRST result, which broke as soon as
+    the shop had a Soyabean Oil of its own. The test asks whether its product
+    is among the matches, not whether it happens to sort first.
+    """
     code = bc.generate_code(777)
-    svc.create(f"{SKU}15", "Soyabean Oil 1L", barcode=code)
-    assert svc.search("soyabean")[0].sku == f"{SKU}15"
-    assert svc.search(f"{SKU}15")[0].name == "Soyabean Oil 1L"
-    assert svc.search(code)[0].name == "Soyabean Oil 1L"
+    name = f"Zedquail Pressed Oil {SKU}15"
+    svc.create(f"{SKU}15", name, barcode=code)
+
+    assert f"{SKU}15" in {p.sku for p in svc.search("zedquail")}
+    assert svc.search(f"{SKU}15")[0].name == name
+    # A barcode is unique, so this one may assert on the single match.
+    assert [p.name for p in svc.search(code)] == [name]
 
 
 def test_an_exact_barcode_match_sorts_first(svc):

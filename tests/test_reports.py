@@ -108,11 +108,21 @@ def ctx(db):
                PurchaseLine(oil, Decimal("200"), Decimal("100.00"))],
         paid_amount=Decimal("10000.00")))
 
-    yield {"auth": auth, "reports": ReportService(auth), "sales": sales,
+    reports = ReportService(auth)
+    # Every figure below is asserted as a CHANGE from this baseline. These
+    # reports cover a whole day at a whole outlet, so a shop that is actually
+    # trading has takings of its own in them; the tests used to assert absolute
+    # totals and started failing the moment the database held real sales.
+    base = {
+        "pnl": reports.profit_loss(TODAY, TODAY, warehouse),
+        "sales": reports.sales_report(TODAY, TODAY, warehouse).totals,
+    }
+
+    yield {"auth": auth, "reports": reports, "sales": sales,
            "returns": SaleReturnService(auth), "products": products,
            "customers": CustomerService(auth),
            "warehouse": warehouse, "rice": rice, "oil": oil,
-           "supplier": supplier, "customer": customer}
+           "supplier": supplier, "customer": customer, "base": base}
     _purge()
 
 
@@ -125,6 +135,17 @@ def _sell(ctx, rice=2, oil=0, tendered=None, customer_id=None, discount="0"):
         warehouse_id=ctx["warehouse"], customer_id=customer_id, lines=lines,
         discount_value=Decimal(discount),
         tendered=Decimal(tendered) if tendered is not None else gross))
+
+
+def _pnl_change(ctx, key: str) -> Decimal:
+    """How much `key` moved since the fixture took its baseline."""
+    now = ctx["reports"].profit_loss(TODAY, TODAY, ctx["warehouse"])
+    return Decimal(str(now[key])) - Decimal(str(ctx["base"]["pnl"][key]))
+
+
+def _sales_change(ctx, key: str) -> Decimal:
+    now = ctx["reports"].sales_report(TODAY, TODAY, ctx["warehouse"]).totals
+    return Decimal(str(now[key])) - Decimal(str(ctx["base"]["sales"][key]))
 
 
 def _sql(query: str, params=()) -> Decimal:
@@ -204,10 +225,9 @@ def test_purchase_report_totals_match(ctx):
 
 def test_profit_is_revenue_less_the_cost_stamped_on_each_line(ctx):
     _sell(ctx, rice=10)                      # sells at 420, cost stamped at 300
-    figures = ctx["reports"].profit_loss(TODAY, TODAY, ctx["warehouse"])
-    assert figures["line_revenue"] == Decimal("4200.00")
-    assert figures["cogs"] == Decimal("3000.00")
-    assert figures["gross_profit"] == Decimal("1200.00")
+    assert _pnl_change(ctx, "line_revenue") == Decimal("4200.00")
+    assert _pnl_change(ctx, "cogs") == Decimal("3000.00")
+    assert _pnl_change(ctx, "gross_profit") == Decimal("1200.00")
 
 
 def test_profit_is_unchanged_when_the_purchase_price_is_edited(ctx):
@@ -219,7 +239,8 @@ def test_profit_is_unchanged_when_the_purchase_price_is_edited(ctx):
 
     after = ctx["reports"].profit_loss(TODAY, TODAY, ctx["warehouse"])
     assert after["cogs"] == before["cogs"]
-    assert after["gross_profit"] == before["gross_profit"] == Decimal("1200.00")
+    assert after["gross_profit"] == before["gross_profit"]
+    assert _pnl_change(ctx, "gross_profit") == Decimal("1200.00")
 
 
 def test_a_return_removes_both_the_revenue_and_the_cost(ctx):
@@ -227,19 +248,17 @@ def test_a_return_removes_both_the_revenue_and_the_cost(ctx):
     item_id = ctx["returns"].returnable_quantities(sale_id)[0].sale_item_id
     ctx["returns"].create(ReturnDraft(sale_id, [ReturnLine(item_id, Decimal("4"))]))
 
-    figures = ctx["reports"].profit_loss(TODAY, TODAY, ctx["warehouse"])
-    assert figures["returned"] == Decimal("1680.00")       # 4 x 420
-    assert figures["returned_cogs"] == Decimal("1200.00")  # 4 x 300
-    assert figures["net_revenue"] == Decimal("2520.00")
-    assert figures["net_cogs"] == Decimal("1800.00")
-    assert figures["gross_profit"] == Decimal("720.00")    # 6 units x 120 margin
+    assert _pnl_change(ctx, "returned") == Decimal("1680.00")       # 4 x 420
+    assert _pnl_change(ctx, "returned_cogs") == Decimal("1200.00")  # 4 x 300
+    assert _pnl_change(ctx, "net_revenue") == Decimal("2520.00")
+    assert _pnl_change(ctx, "net_cogs") == Decimal("1800.00")
+    assert _pnl_change(ctx, "gross_profit") == Decimal("720.00")    # 6 x 120 margin
 
 
 def test_an_invoice_discount_comes_off_the_profit(ctx):
     _sell(ctx, rice=10, discount="200")
-    figures = ctx["reports"].profit_loss(TODAY, TODAY, ctx["warehouse"])
-    assert figures["header_discount"] == Decimal("200.00")
-    assert figures["gross_profit"] == Decimal("1000.00")   # 1200 - 200
+    assert _pnl_change(ctx, "header_discount") == Decimal("200.00")
+    assert _pnl_change(ctx, "gross_profit") == Decimal("1000.00")   # 1200 - 200
 
 
 def test_tax_is_reported_but_is_not_profit(ctx):
@@ -247,9 +266,9 @@ def test_tax_is_reported_but_is_not_profit(ctx):
                       lines=[SaleLine(ctx["rice"], Decimal("10"), Decimal("420.00"))],
                       tax_amount=Decimal("630.00"), tendered=Decimal("4830.00"))
     ctx["sales"].create(draft)
-    figures = ctx["reports"].profit_loss(TODAY, TODAY, ctx["warehouse"])
-    assert figures["tax_collected"] == Decimal("630.00")
-    assert figures["gross_profit"] == Decimal("1200.00"), "tax must not inflate profit"
+    assert _pnl_change(ctx, "tax_collected") == Decimal("630.00")
+    assert _pnl_change(ctx, "gross_profit") == Decimal("1200.00"), \
+        "tax must not inflate profit"
 
 
 # ------------------------------------------------- held and cancelled sales
@@ -261,9 +280,10 @@ def test_reports_exclude_held_sales(ctx):
         warehouse_id=ctx["warehouse"],
         lines=[SaleLine(ctx["rice"], Decimal("50"), Decimal("420.00"))]))
 
-    report = ctx["reports"].sales_report(TODAY, TODAY, ctx["warehouse"])
-    assert report.totals["invoices"] == 1
-    assert report.totals["billed"] == Decimal("840.00")
+    # One sale was completed and one was only held, so the report moved by
+    # exactly one invoice and the value of that one sale.
+    assert _sales_change(ctx, "invoices") == 1
+    assert _sales_change(ctx, "billed") == Decimal("840.00")
 
 
 def test_reports_exclude_cancelled_sales(ctx):
@@ -274,11 +294,11 @@ def test_reports_exclude_cancelled_sales(ctx):
         cur.execute("UPDATE sales SET status='cancelled' WHERE id=%s", (sale_id,))
         cur.close()
 
-    report = ctx["reports"].sales_report(TODAY, TODAY, ctx["warehouse"])
-    assert report.totals["invoices"] == 1
-    assert report.totals["billed"] == Decimal("1260.00")
-    assert ctx["reports"].profit_loss(TODAY, TODAY, ctx["warehouse"])["cogs"] \
-        == Decimal("900.00")
+    # Two sales were made and one was then cancelled, so only the survivor
+    # counts: +1 invoice, not +2.
+    assert _sales_change(ctx, "invoices") == 1
+    assert _sales_change(ctx, "billed") == Decimal("1260.00")
+    assert _pnl_change(ctx, "cogs") == Decimal("900.00")
 
 
 # ------------------------------------------------------------ other reports
@@ -346,8 +366,9 @@ def test_dashboard_summary(ctx):
     _sell(ctx, rice=2, tendered="0")             # on credit
 
     summary = ctx["reports"].dashboard_summary(TODAY, ctx["warehouse"])
-    assert summary["invoices_today"] == 2
-    assert summary["billed_today"] == Decimal("2100.00")
+    base = ctx["base"]["sales"]
+    assert summary["invoices_today"] - Decimal(str(base["invoices"])) == 2
+    assert summary["billed_today"] - Decimal(str(base["billed"])) == Decimal("2100.00")
     assert summary["collected_today"] >= Decimal("1260.00")
     assert len(summary["trend"]) == 14
     assert summary["trend"][-1][0] == TODAY

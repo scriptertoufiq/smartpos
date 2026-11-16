@@ -71,19 +71,62 @@ def main(argv: list[str] | None = None) -> int:
         _shutdown()
 
 
+def _light_palette():
+    """The palette the application paints with, whatever the desktop is set to.
+
+    The stylesheet hard-codes light surfaces -- white cards, pale panels. A
+    widget that takes its text colour from the desktop instead then paints white
+    text on those white cards when the machine is in dark mode, and the labels
+    simply vanish. Carrying our own palette means the application looks the same
+    on every machine and nothing depends on a system setting.
+
+    A proper dark theme would mean a second set of surface colours throughout
+    the stylesheet; this is the honest interim, not a substitute for one.
+    """
+    from PyQt5.QtGui import QColor, QPalette
+
+    ink = QColor("#111827")
+    muted = QColor("#6b7280")
+    surface = QColor("#ffffff")
+    ground = QColor("#f5f6f8")
+    accent = QColor("#2563eb")
+
+    palette = QPalette()
+    palette.setColor(QPalette.Window, ground)
+    palette.setColor(QPalette.WindowText, ink)
+    palette.setColor(QPalette.Base, surface)
+    palette.setColor(QPalette.AlternateBase, QColor("#f9fafb"))
+    palette.setColor(QPalette.Text, ink)
+    palette.setColor(QPalette.Button, surface)
+    palette.setColor(QPalette.ButtonText, ink)
+    palette.setColor(QPalette.BrightText, QColor("#b91c1c"))
+    palette.setColor(QPalette.ToolTipBase, QColor("#111827"))
+    palette.setColor(QPalette.ToolTipText, surface)
+    palette.setColor(QPalette.PlaceholderText, QColor("#9ca3af"))
+    palette.setColor(QPalette.Highlight, accent)
+    palette.setColor(QPalette.HighlightedText, surface)
+    palette.setColor(QPalette.Link, accent)
+
+    for role, colour in ((QPalette.WindowText, muted), (QPalette.Text, muted),
+                         (QPalette.ButtonText, muted)):
+        palette.setColor(QPalette.Disabled, role, colour)
+    return palette
+
+
 def _run_gui() -> int:
-    """Show the login dialog and, on success, the main window."""
+    """Open the one window the application has, starting on its sign-in page."""
     # Imported here so `--check` and the CLI scripts never need a display.
+    from PyQt5.QtGui import QColor, QPalette
     from PyQt5.QtWidgets import QApplication
 
     from smartpos.services.auth_service import AuthService
-    from smartpos.ui.login_dialog import LoginDialog
     from smartpos.ui.main_window import MainWindow
 
     app = QApplication(sys.argv[:1])
     app.setApplicationName(__app_name__)
     app.setApplicationVersion(__version__)
     app.setStyle("Fusion")
+    app.setPalette(_light_palette())
 
     stylesheet = Path(__file__).resolve().parent / "ui" / "resources" / "styles.qss"
     if stylesheet.is_file():
@@ -91,43 +134,15 @@ def _run_gui() -> int:
 
     auth = AuthService()
 
-    # Sign in, work, sign out, sign in again: the loop a shared counter needs.
-    # Closing the login dialog is how you leave the application.
-    while True:
-        built: dict[str, MainWindow] = {}
-
-        def _hand_off(_user, _built=built) -> None:
-            """Put the main window up while the login dialog still covers the
-            screen. Building it after the dialog closed left a frame of bare
-            desktop showing through -- that gap is the flicker."""
-            window = MainWindow(auth)
-            window.show()
-            window.raise_()
-            _built["window"] = window
-
-        login = LoginDialog(auth)
-        login.signed_in.connect(_hand_off)
-        accepted = login.exec_() == login.Accepted
-        login.deleteLater()
-
-        if not accepted:
-            log.info("Sign in cancelled; exiting")
-            return EXIT_OK
-
-        window = built.get("window") or MainWindow(auth)
-        if not window.isVisible():
-            window.show()
-        window.activateWindow()
-
-        exit_code = app.exec_()
-        if not window.sign_out_requested:
-            return exit_code
-
-        # Drop the window before reopening the dialog so nothing of the previous
-        # session is still on screen or holding a reference to its user.
-        window.deleteLater()
-        app.processEvents()
-        log.info("Signed out; returning to the login screen")
+    # One window for the whole run. Signing in and out swap the page inside it,
+    # which is what lets a maximised or full-screen window stay that way across
+    # a shift change: there is no second window whose constructor could disagree
+    # about the state, and nothing to rebuild and reposition.
+    window = MainWindow(auth)
+    window.show()
+    window.raise_()
+    window.activateWindow()
+    return app.exec_()
 
 
 if __name__ == "__main__":

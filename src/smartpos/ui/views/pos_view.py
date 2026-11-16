@@ -9,7 +9,7 @@ from __future__ import annotations
 from decimal import Decimal
 from pathlib import Path
 
-from PyQt5.QtCore import QEvent, Qt
+from PyQt5.QtCore import QEvent, QPoint, QTimer, Qt
 from PyQt5.QtGui import QKeySequence
 from PyQt5.QtWidgets import (
     QAbstractItemView, QAbstractSpinBox, QApplication, QComboBox, QDialog,
@@ -27,12 +27,22 @@ from smartpos.services.customer_service import CustomerService
 from smartpos.services.product_service import ProductService
 from smartpos.services.sale_service import SaleDraft, SaleLine, SaleService
 from smartpos.services.settings_service import SettingsService
+from smartpos.services.stock_service import StockService
 from smartpos.reports import invoice as invoice_report
 
 log = get_logger(__name__)
 
-CART_COLUMNS = ["#", "Product", "Qty", "Price", "Disc", "Total"]
+CART_COLUMNS = ["#", "Product", "Qty", "", "Price", "Disc", "Total"]
+STEP_COLUMN = 3                 # the - / + buttons live here
+QTY_STEP = Decimal("1")
 ZERO = Decimal("0.00")
+
+# Suggestions. Short enough that the list never covers the cart, and slow
+# enough that a barcode scanner -- which types a whole code in well under
+# 100ms and then presses Enter -- is finished before the first query runs.
+SUGGEST_LIMIT = 8
+SUGGEST_DELAY_MS = 180
+SUGGEST_MIN_CHARS = 2
 
 
 class HeldBillsDialog(QDialog):
@@ -100,7 +110,9 @@ class PosView(QWidget):
         self._products = ProductService(auth)
         self._customers = CustomerService(auth)
         self._settings = SettingsService(auth)
+        self._stock = StockService(auth)
         self._lines: list[SaleLine] = []
+        self._suggestions: list = []
         self._names: dict[int, str] = {}
         self._resumed_id: int | None = None
         self._busy = False
@@ -111,6 +123,7 @@ class PosView(QWidget):
         root.addWidget(self._build_left(), 3)
         root.addWidget(self._build_right(), 1)
 
+        self._build_suggestions()
         self._install_shortcuts()
         self._recalculate()
 
@@ -128,7 +141,8 @@ class PosView(QWidget):
         label.setObjectName("hintLabel")
         top.addWidget(label)
         self.entry = QLineEdit()
-        self.entry.setPlaceholderText("barcode, SKU or name — then Enter")
+        self.entry.setPlaceholderText(
+            "barcode, SKU or name — Enter to add, ↓ to pick from the list")
         self.entry.setMinimumHeight(40)
         self.entry.setObjectName("posEntry")
         top.addWidget(self.entry, 1)
@@ -147,6 +161,7 @@ class PosView(QWidget):
         self.cart.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.cart.verticalHeader().setVisible(False)
         self.cart.setAlternatingRowColors(True)
+        self.cart.verticalHeader().setDefaultSectionSize(32)   # fits a stepper
         self.cart.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
         layout.addWidget(self.cart, 1)
 
@@ -154,6 +169,8 @@ class PosView(QWidget):
         keys.setSpacing(6)
         for text, slot in (("F2  Hold", self._hold), ("F3  Recall", self._recall),
                            ("F4  Qty", self._edit_quantity),
+                           ("Ctrl \u2212  Less", lambda: self._step_selected(-QTY_STEP)),
+                           ("Ctrl +  More", lambda: self._step_selected(QTY_STEP)),
                            ("Del  Remove", self._remove_line),
                            ("Esc  Clear", self._clear)):
             button = QPushButton(text)
@@ -253,7 +270,160 @@ class PosView(QWidget):
         self.complete.clicked.connect(self._complete)
         return panel
 
+    # ---------------------------------------------------------- suggestions
+
+    def _build_suggestions(self) -> None:
+        """The list that drops under the search box as the cashier types.
+
+        It is an ordinary child widget, not a Qt popup window. A popup grabs the
+        keyboard, and this screen's whole design is that the search box never
+        loses focus -- so the list is drawn over the cart instead and steers
+        itself from keys the box forwards to it.
+        """
+        self._suggest = QListWidget(self)
+        self._suggest.setObjectName("posSuggest")
+        self._suggest.setFocusPolicy(Qt.NoFocus)      # the entry keeps focus
+        self._suggest.setSelectionMode(QAbstractItemView.SingleSelection)
+        self._suggest.setUniformItemSizes(True)
+        self._suggest.hide()
+        self._suggest.itemClicked.connect(lambda _item: self._take_suggestion())
+
+        self._suggest_timer = QTimer(self)
+        self._suggest_timer.setSingleShot(True)
+        self._suggest_timer.setInterval(SUGGEST_DELAY_MS)
+        self._suggest_timer.timeout.connect(self._load_suggestions)
+        self.entry.textEdited.connect(self._suggest_timer.start)
+
+    def _hide_suggestions(self) -> None:
+        self._suggest_timer.stop()
+        self._suggestions = []
+        self._suggest.clear()
+        self._suggest.hide()
+
+    def _load_suggestions(self) -> None:
+        """Query the products the typed term matches and show them."""
+        term = self.entry.text().strip()
+        if len(term) < SUGGEST_MIN_CHARS:
+            self._hide_suggestions()
+            return
+        try:
+            matches = self._products.search(term, limit=SUGGEST_LIMIT)
+        except Exception:
+            # A dead list is a nuisance; a dead till is a disaster. Searching is
+            # a convenience, so it fails quietly and Enter still rings up.
+            log.exception("Could not load product suggestions")
+            self._hide_suggestions()
+            return
+        if not matches:
+            self._hide_suggestions()
+            return
+
+        on_hand = self._stock_for(term)
+        currency = self._currency()
+        self._suggestions = matches
+        self._suggest.clear()
+        for product in matches:
+            bits = [product.name, product.sku]
+            bits.append(f"{currency} {Decimal(str(product.sale_price)):,.2f}")
+            quantity = on_hand.get(product.id)
+            if quantity is not None:
+                bits.append(f"{quantity:,.3f}".rstrip("0").rstrip(".") + " in stock")
+            item = QListWidgetItem("   ·   ".join(bits))
+            item.setData(Qt.UserRole, product.id)
+            if quantity is not None and quantity <= 0:
+                item.setForeground(Qt.gray)     # sellable only if you allow it
+            self._suggest.addItem(item)
+
+        # Nothing is highlighted to begin with, which is what keeps a scan safe:
+        # Enter rings up what was typed unless the cashier has arrowed into the
+        # list on purpose.
+        self._suggest.setCurrentRow(-1)
+        self._position_suggestions()
+        self._suggest.show()
+        self._suggest.raise_()
+
+    def _stock_for(self, term: str) -> dict:
+        """product_id -> quantity at this till's outlet, in one query."""
+        warehouse_id = self._warehouse_id()
+        if warehouse_id is None:
+            return {}
+        try:
+            rows = self._stock.levels(warehouse_id, search=term)
+        except Exception:
+            log.exception("Could not read stock for the suggestion list")
+            return {}
+        return {row["product_id"]: Decimal(str(row["quantity"])) for row in rows}
+
+    def _currency(self) -> str:
+        try:
+            return self._settings.currency()
+        except Exception:
+            return ""
+
+    def _position_suggestions(self) -> None:
+        """Hang the list off the bottom-left of the search box."""
+        top_left = self.entry.mapTo(self, QPoint(0, self.entry.height()))
+        rows = min(self._suggest.count(), SUGGEST_LIMIT)
+        row_height = self._suggest.sizeHintForRow(0) if rows else 24
+        height = rows * row_height + 2 * self._suggest.frameWidth()
+        height = min(height, max(0, self.height() - top_left.y() - 12))
+        self._suggest.setGeometry(top_left.x(), top_left.y(),
+                                  self.entry.width(), height)
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        if self._suggest.isVisible():
+            self._position_suggestions()
+
+    def _suggestion_keys(self) -> set:
+        """Which keys the list owns right now.
+
+        Enter is on this list only once a row is highlighted. That is the whole
+        scanner guarantee: a scan types, no row is highlighted, and its Enter
+        goes to the normal barcode path.
+        """
+        keys = {Qt.Key_Down, Qt.Key_Up, Qt.Key_Escape}
+        if self._suggest.currentRow() >= 0:
+            keys |= {Qt.Key_Return, Qt.Key_Enter}
+        return keys
+
+    def _suggestion_key(self, event) -> bool:
+        key = event.key()
+        last = self._suggest.count() - 1
+        row = self._suggest.currentRow()
+        if key == Qt.Key_Down:
+            self._suggest.setCurrentRow(min(row + 1, last) if row >= 0 else 0)
+            return True
+        if key == Qt.Key_Up:
+            # Arrowing off the top lets go of the list again, so Enter goes back
+            # to meaning "ring up exactly what I typed".
+            self._suggest.setCurrentRow(row - 1 if row > 0 else -1)
+            return True
+        if key == Qt.Key_Escape:
+            self._hide_suggestions()
+            return True
+        if key in (Qt.Key_Return, Qt.Key_Enter):
+            self._take_suggestion()
+            return True
+        return False
+
+    def _take_suggestion(self) -> None:
+        row = self._suggest.currentRow()
+        if row < 0:
+            row = self._suggest.row(self._suggest.currentItem())
+        if not 0 <= row < len(self._suggestions):
+            return
+        product = self._suggestions[row]
+        self._hide_suggestions()
+        self._add_product(product)
+
     def _install_shortcuts(self) -> None:
+        # Ctrl is deliberate: a bare + or - is printable, and the event filter
+        # sends every printable key to the scanner box by design.
+        for sequence, slot in (("Ctrl++", lambda: self._step_selected(QTY_STEP)),
+                               ("Ctrl+=", lambda: self._step_selected(QTY_STEP)),
+                               ("Ctrl+-", lambda: self._step_selected(-QTY_STEP))):
+            QShortcut(QKeySequence(sequence), self, slot)
         for key, slot in ((Qt.Key_F2, self._hold), (Qt.Key_F3, self._recall),
                           (Qt.Key_F4, self._edit_quantity),
                           (Qt.Key_F12, self._complete),
@@ -285,6 +455,7 @@ class PosView(QWidget):
 
     def _focus_entry(self) -> None:
         """The scanner types here. Nothing else may hold focus for long."""
+        self._hide_suggestions()
         self.entry.clear()
         self.entry.setFocus(Qt.OtherFocusReason)
 
@@ -295,6 +466,7 @@ class PosView(QWidget):
         self._focus_entry()
 
     def hideEvent(self, event) -> None:
+        self._hide_suggestions()
         QApplication.instance().removeEventFilter(self)
         super().hideEvent(event)
 
@@ -313,9 +485,25 @@ class PosView(QWidget):
         held with a modifier, and anything inside a dialog opened over this
         screen.
         """
-        if event.type() != QEvent.KeyPress or not self.isVisible():
+        etype = event.type()
+        if etype not in (QEvent.KeyPress, QEvent.ShortcutOverride):
+            return super().eventFilter(obj, event)
+        if not self.isVisible():
             return super().eventFilter(obj, event)
         if not isinstance(obj, QWidget) or obj.window() is not self.window():
+            return super().eventFilter(obj, event)
+
+        # While the suggestion list is open it owns the arrow keys, Escape, and
+        # -- only once a row is highlighted -- Enter. ShortcutOverride has to be
+        # claimed too, or Escape would reach the F-key shortcut and clear the
+        # whole bill instead of just closing the list.
+        if self._suggest.isVisible() and event.key() in self._suggestion_keys():
+            if etype == QEvent.ShortcutOverride:
+                event.accept()
+                return True
+            return self._suggestion_key(event)
+
+        if etype != QEvent.KeyPress:
             return super().eventFilter(obj, event)
 
         # Stand aside if the key is going to something that legitimately takes
@@ -373,16 +561,25 @@ class PosView(QWidget):
                     self._focus_entry()
                     return
                 if len(matches) > 1:
+                    # Show them instead of sending the cashier back to the
+                    # keyboard. The term is deliberately NOT cleared here --
+                    # _focus_entry() would wipe both it and the list.
                     self.message.setText(
-                        f"“{term}” matches more than one product — scan it or "
-                        "type the full SKU.")
-                    self._focus_entry()
+                        f"“{term}” matches more than one product — pick one "
+                        "from the list with ↓ and Enter, or scan it.")
+                    self.message.setStyleSheet("")
+                    self._load_suggestions()
+                    self.entry.setFocus(Qt.OtherFocusReason)
                     return
                 product = matches[0]
         except Exception as exc:
             self._report(exc)
             return
 
+        self._add_product(product)
+
+    def _add_product(self, product) -> None:
+        """Put one of `product` in the cart, or bump the line already there."""
         for line in self._lines:
             if line.product_id == product.id:
                 line.quantity += Decimal("1")
@@ -442,6 +639,77 @@ class PosView(QWidget):
             self._recalculate()
         self._focus_entry()
 
+    def _stepper(self) -> QWidget:
+        """The - / + pair that sits in one cart row.
+
+        Two things are deliberate. Neither button takes focus -- the search box
+        has to keep it, or the next scan lands on a button instead of in the
+        cart. And neither captures its row number: a stepper outlives the rows
+        around it, and a captured index would point at the wrong line as soon as
+        something above it was removed. The row is looked up when it is clicked.
+        """
+        holder = QWidget()
+        # Qt sizes a cell widget from the row's text height, not the row height,
+        # which clipped the buttons; a fixed height overrides that.
+        holder.setFixedHeight(26)
+        layout = QHBoxLayout(holder)
+        layout.setContentsMargins(2, 3, 2, 3)
+        layout.setSpacing(4)
+        for text, delta, tip in (("\u2212", -QTY_STEP, "One fewer (Ctrl\u2212)"),
+                                 ("+", QTY_STEP, "One more (Ctrl+)")):
+            button = QPushButton(text)
+            button.setObjectName("cartStep")
+            button.setFocusPolicy(Qt.NoFocus)
+            button.setFixedSize(30, 20)
+            button.setToolTip(tip)
+            button.clicked.connect(
+                lambda _checked, b=button, d=delta: self._stepper_clicked(b, d))
+            layout.addWidget(button)
+        return holder
+
+    def _stepper_clicked(self, button, delta: Decimal) -> None:
+        """Work out which row this button belongs to, then move that line."""
+        holder = button.parentWidget()
+        for row in range(self.cart.rowCount()):
+            if self.cart.cellWidget(row, STEP_COLUMN) is holder:
+                self._step_quantity(row, delta)
+                return
+
+    def _step_quantity(self, row: int, delta: Decimal) -> None:
+        """Move one line's quantity by `delta`, removing it when it hits zero."""
+        if not 0 <= row < len(self._lines):
+            return
+        line = self._lines[row]
+        wanted = line.quantity + delta
+        if wanted <= 0:
+            name = self._names.get(line.product_id, "the line")
+            del self._lines[row]
+            self.message.setText(f"Removed {name}")
+        else:
+            line.quantity = wanted
+            self.message.setText(
+                f"{self._names.get(line.product_id, '')} \u00d7 {wanted:,.3f}"
+                .replace(".000", ""))
+        self.message.setStyleSheet("")
+        self._recalculate()
+        self._reselect(row)
+        self.entry.setFocus(Qt.OtherFocusReason)
+
+    def _reselect(self, row: int) -> None:
+        """Keep the same line under the cursor after a redraw."""
+        if not self._lines:
+            return
+        self.cart.selectRow(min(row, len(self._lines) - 1))
+
+    def _step_selected(self, delta: Decimal) -> None:
+        """Ctrl+ / Ctrl- act on the selected line, or the one just added."""
+        if not self._lines:
+            return
+        row = self._selected_row()
+        if row is None:
+            row = len(self._lines) - 1
+        self._step_quantity(row, delta)
+
     def _clear(self) -> None:
         if self._lines and QMessageBox.question(
             self, "Clear the cart", "Discard every line?",
@@ -478,17 +746,25 @@ class PosView(QWidget):
     def _recalculate(self) -> None:
         self.cart.setRowCount(len(self._lines))
         for row, line in enumerate(self._lines):
-            cells = [str(row + 1), self._names.get(line.product_id, "?"),
-                     f"{line.quantity:,.3f}", f"{line.unit_price:,.2f}",
-                     f"{line.discount:,.2f}", f"{line.line_total:,.2f}"]
-            for col, text in enumerate(cells):
+            cells = {0: str(row + 1),
+                     1: self._names.get(line.product_id, "?"),
+                     2: f"{line.quantity:,.3f}",
+                     4: f"{line.unit_price:,.2f}",
+                     5: f"{line.discount:,.2f}",
+                     6: f"{line.line_total:,.2f}"}
+            for col, text in cells.items():
                 item = QTableWidgetItem(text)
                 if col >= 2:
                     item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
                 elif col == 0:
                     item.setTextAlignment(Qt.AlignCenter)
                 self.cart.setItem(row, col, item)
+            if self.cart.cellWidget(row, STEP_COLUMN) is None:
+                self.cart.setCellWidget(row, STEP_COLUMN, self._stepper())
         self.cart.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
+        self.cart.horizontalHeader().setSectionResizeMode(
+            STEP_COLUMN, QHeaderView.Fixed)
+        self.cart.setColumnWidth(STEP_COLUMN, 74)
 
         draft = self._draft()
         self._value_labels["Subtotal"].setText(f"{draft.subtotal:,.2f}")

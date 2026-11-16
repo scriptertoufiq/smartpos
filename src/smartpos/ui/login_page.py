@@ -1,16 +1,23 @@
-"""Login dialog, shown before the main window.
+"""The sign-in screen.
 
-Fills the screen the way a counter terminal should, with the sign-in card
-centred. Nothing else is on screen to click, so the first thing a cashier sees
-at the start of a shift is the one thing they need to do.
+A page inside the main window, not a window of its own.
+
+It used to be a QDialog, which meant signing in and signing out each threw away
+the window you were looking at and built a fresh one -- and a fresh window opens
+in whatever state its constructor asks for, not the state you had put it in. If
+you were full screen, you were dropped out of it (on macOS, out of its Space
+entirely) twice per shift change. Keeping one window for the whole run of the
+application makes that impossible by construction: there is nothing to restore
+because nothing is ever replaced.
+
+The card stays centred on an otherwise empty screen, so the first thing a
+cashier sees at the start of a shift is the one thing they need to do.
 """
 
 from __future__ import annotations
 
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtWidgets import (
-    QApplication,
-    QDialog,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -32,14 +39,11 @@ log = get_logger(__name__)
 CARD_WIDTH = 400
 
 
-class LoginDialog(QDialog):
+class LoginPage(QWidget):
     """Collects a username and password and hands them to AuthService.
 
-    Closes with Accepted only once someone is signed in; `user` then holds them.
-
-    `signed_in` fires while this dialog is still on screen, so the caller can
-    build and show the main window before this one disappears. Without that,
-    the desktop shows through the gap between the two.
+    Emits `signed_in` with the User once the credentials are accepted. The
+    window listening for it swaps itself over to the application shell.
     """
 
     signed_in = pyqtSignal(object)
@@ -48,20 +52,10 @@ class LoginDialog(QDialog):
         super().__init__(parent)
         self._auth = auth
         self.user: User | None = None
-
-        self.setWindowTitle(f"{__app_name__} — Sign in")
         self.setObjectName("loginWindow")
-        self.setModal(True)
-        # Give it the full screen geometry *before* it is ever realised, so the
-        # first frame is already the right size. Setting only the maximized
-        # state makes Qt paint at the size hint first and then resize, which is
-        # the flash you see.
-        screen = QApplication.primaryScreen()
-        if screen is not None:
-            self.setGeometry(screen.availableGeometry())
-        # Keep the title bar so the window can still be closed on any platform;
-        # true full screen traps a user on macOS.
-        self.setWindowState(Qt.WindowMaximized)
+        # A plain QWidget ignores a stylesheet background unless it is told to
+        # paint one; without this the sign-in page shows the window's grey.
+        self.setAttribute(Qt.WA_StyledBackground, True)
 
         # Outer layout exists only to centre the card in the middle of the screen.
         outer = QVBoxLayout(self)
@@ -76,8 +70,6 @@ class LoginDialog(QDialog):
 
         outer.addStretch(1)
         outer.addWidget(self._build_footer())
-
-        self.username.setFocus()
 
     # ------------------------------------------------------------- building
 
@@ -95,7 +87,7 @@ class LoginDialog(QDialog):
         title.setAlignment(Qt.AlignCenter)
         layout.addWidget(title)
 
-        subtitle = QLabel("Point of Sale &amp; Inventory")
+        subtitle = QLabel("Point of Sale & Inventory")
         subtitle.setObjectName("loginSubtitle")
         subtitle.setAlignment(Qt.AlignCenter)
         layout.addWidget(subtitle)
@@ -123,6 +115,7 @@ class LoginDialog(QDialog):
         self.sign_in.setProperty("primary", True)
         self.sign_in.setMinimumHeight(44)
         self.sign_in.setDefault(True)
+        self.sign_in.setAutoDefault(True)
         self.sign_in.setCursor(Qt.PointingHandCursor)
         layout.addWidget(self.sign_in)
 
@@ -140,6 +133,17 @@ class LoginDialog(QDialog):
         return footer
 
     # ------------------------------------------------------------ behaviour
+
+    def reset(self) -> None:
+        """Blank the form, ready for the next person on the counter."""
+        self.user = None
+        self.username.clear()
+        self.password.clear()
+        self.error.clear()
+        self.error.setVisible(False)
+        self.sign_in.setEnabled(True)
+        self.sign_in.setText("Sign in")
+        self.username.setFocus()
 
     def _show_error(self, message: str) -> None:
         self.error.setText(message)
@@ -173,7 +177,4 @@ class LoginDialog(QDialog):
             self.sign_in.setEnabled(True)
             self.sign_in.setText("Sign in")
 
-        # Hand off while still visible: the listener puts the main window up,
-        # and only then does this dialog close behind it.
         self.signed_in.emit(self.user)
-        self.accept()

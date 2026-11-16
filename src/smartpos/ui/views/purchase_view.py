@@ -5,11 +5,12 @@ from __future__ import annotations
 from datetime import date
 from decimal import Decimal
 
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtWidgets import (
     QAbstractItemView, QComboBox, QDialog, QDialogButtonBox, QDoubleSpinBox,
     QFormLayout, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMessageBox,
-    QPushButton, QSplitter, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
+    QPushButton, QSplitter, QStackedWidget, QTableWidget, QTableWidgetItem,
+    QVBoxLayout, QWidget,
 )
 
 from smartpos.config import get_settings
@@ -20,6 +21,7 @@ from smartpos.services.product_service import ProductService
 from smartpos.services.purchase_service import PurchaseDraft, PurchaseLine, PurchaseService
 from smartpos.services.supplier_service import SupplierService
 from smartpos.services.warehouse_service import WarehouseService
+from smartpos.ui.widgets.form_page import PAGE_FORM, PAGE_LIST
 
 log = get_logger(__name__)
 
@@ -28,20 +30,26 @@ ITEM_COLUMNS = ["SKU", "Product", "Quantity", "Unit cost", "Discount", "Tax", "L
 CART_COLUMNS = ["Product", "Quantity", "Unit cost", "Line total"]
 
 
-class PurchaseEntryDialog(QDialog):
-    """Build a purchase: supplier, outlet, lines, totals."""
+class PurchaseEntryPage(QWidget):
+    """Build a purchase: supplier, outlet, lines, totals.
+
+    A page, not a dialog. It is the longest form in the application and a modal
+    put it in a box in the middle of the screen with the list it came from
+    greyed out behind; here it simply takes the screen over and hands it back.
+    """
+
+    recorded = pyqtSignal(object)      # the finished PurchaseDraft
+    cancelled = pyqtSignal()
 
     def __init__(self, parent, suppliers, warehouses, products,
                  default_warehouse=None, reference: str = ""):
         super().__init__(parent)
-        self.setWindowTitle(f"New purchase  {reference}".strip())
-        self.setMinimumSize(720, 560)
         self._products = {p.id: p for p in products}
         self._lines: list[PurchaseLine] = []
         symbol = get_settings().currency_symbol
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(22, 20, 22, 20)
+        layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(10)
 
         head = QFormLayout()
@@ -126,12 +134,19 @@ class PurchaseEntryDialog(QDialog):
         self.total_label.setAlignment(Qt.AlignRight)
         layout.addWidget(self.total_label)
 
-        buttons = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
-        buttons.button(QDialogButtonBox.Save).setText("Record purchase")
-        buttons.accepted.connect(self._check)
-        buttons.rejected.connect(self.reject)
-        layout.addWidget(buttons)
+        buttons = QHBoxLayout()
+        buttons.addStretch(1)
+        self.cancel_button = QPushButton("Cancel")
+        self.cancel_button.setMinimumHeight(32)
+        buttons.addWidget(self.cancel_button)
+        self.save_button = QPushButton("Record purchase")
+        self.save_button.setProperty("primary", True)
+        self.save_button.setMinimumHeight(32)
+        buttons.addWidget(self.save_button)
+        layout.addLayout(buttons)
 
+        self.save_button.clicked.connect(self._check)
+        self.cancel_button.clicked.connect(self.cancelled)
         add.clicked.connect(self._add_line)
         remove.clicked.connect(self._remove_line)
         self.product.currentIndexChanged.connect(self._suggest_cost)
@@ -205,7 +220,7 @@ class PurchaseEntryDialog(QDialog):
             QMessageBox.warning(self, "Nothing to record",
                                 "Add at least one product.")
             return
-        self.accept()
+        self.recorded.emit(self._draft())
 
     def draft(self) -> PurchaseDraft:
         return self._draft()
@@ -223,13 +238,34 @@ class PurchaseView(QWidget):
         self._products = ProductService(auth)
         self._rows: list[dict] = []
 
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(24, 22, 24, 22)
-        layout.setSpacing(12)
+        self._entry: PurchaseEntryPage | None = None
 
-        heading = QLabel("Purchases")
-        heading.setObjectName("viewHeading")
-        layout.addWidget(heading)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(24, 22, 24, 22)
+        outer.setSpacing(12)
+
+        self.heading = QLabel("Purchases")
+        self.heading.setObjectName("viewHeading")
+        outer.addWidget(self.heading)
+
+        self.pages = QStackedWidget()
+        self.pages.addWidget(self._build_list(auth))     # PAGE_LIST
+        # The entry page is built per purchase -- it is seeded with the
+        # suppliers, outlets and products of the moment -- so page 1 starts as
+        # an empty holder and the real form is swapped into it.
+        self._entry_holder = QWidget()
+        self._entry_layout = QVBoxLayout(self._entry_holder)
+        self._entry_layout.setContentsMargins(0, 0, 0, 0)
+        self.pages.addWidget(self._entry_holder)         # PAGE_FORM
+        outer.addWidget(self.pages, 1)
+
+    # -------------------------------------------------------- the list page
+
+    def _build_list(self, auth: AuthService) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(10)
 
         bar = QHBoxLayout()
         bar.setSpacing(8)
@@ -301,6 +337,36 @@ class PurchaseView(QWidget):
         self.add_button.setVisible(writable)
         self.pay_button.setVisible(writable)
         self._load_suppliers()
+        return page
+
+    # -------------------------------------------------------- the entry page
+
+    def _close_entry(self) -> None:
+        """Drop the entry form and go back to the list."""
+        if self._entry is not None:
+            self._entry_layout.removeWidget(self._entry)
+            self._entry.deleteLater()
+            self._entry = None
+        self.heading.setText("Purchases")
+        self.pages.setCurrentIndex(PAGE_LIST)
+        self.table.setFocus()
+
+    def _record(self, draft) -> None:
+        if self._entry is not None:
+            self._entry.save_button.setEnabled(False)
+        try:
+            self._service.create(draft)
+        except Exception as exc:
+            # Stay on the form: the lines just typed in are worth keeping.
+            self._report(exc)
+            return
+        finally:
+            if self._entry is not None:
+                self._entry.save_button.setEnabled(True)
+
+        self._close_entry()
+        self._load_suppliers()
+        self.refresh()
 
     # ------------------------------------------------------------- helpers
 
@@ -427,17 +493,18 @@ class PurchaseView(QWidget):
             return
 
         default = getattr(self.window(), "active_warehouse_id", None)
-        dialog = PurchaseEntryDialog(self, suppliers, warehouses, products,
-                                     default, self._service.next_reference_no())
-        if dialog.exec_() != QDialog.Accepted:
-            return
-        try:
-            self._service.create(dialog.draft())
-        except Exception as exc:
-            self._report(exc)
-            return
-        self._load_suppliers()
-        self.refresh()
+        reference = self._service.next_reference_no()
+
+        self._close_entry()                     # never stack two forms
+        self._entry = PurchaseEntryPage(self, suppliers, warehouses, products,
+                                        default, reference)
+        self._entry.recorded.connect(self._record)
+        self._entry.cancelled.connect(self._close_entry)
+        self._entry_layout.addWidget(self._entry)
+
+        self.heading.setText(f"Purchases \u203a New purchase {reference}".rstrip())
+        self.pages.setCurrentIndex(PAGE_FORM)
+        self._entry.supplier.setFocus()
 
     def _pay(self) -> None:
         purchase = self._selected()

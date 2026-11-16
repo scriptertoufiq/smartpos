@@ -1,8 +1,11 @@
 """Shared screen for customers and suppliers.
 
 The two differ only in wording and in which direction their money runs, so the
-layout, the ledger panel and the payment dialog live here once. Each subclass
+layout, the ledger panel and the payment form live here once. Each subclass
 supplies its own labels and service calls.
+
+The list and the create/edit form are two pages of one screen; see
+`smartpos.ui.widgets.form_page` for why there is no dialog here.
 """
 
 from __future__ import annotations
@@ -25,6 +28,7 @@ from PyQt5.QtWidgets import (
     QMessageBox,
     QPushButton,
     QSplitter,
+    QStackedWidget,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -35,75 +39,14 @@ from smartpos.config import get_settings
 from smartpos.core.exceptions import SmartPOSError
 from smartpos.core.logging import get_logger
 from smartpos.services.auth_service import AuthService
+from smartpos.ui.widgets.form_page import (
+    PAGE_FORM, PAGE_LIST, FormCard, FormPage,
+)
 
 log = get_logger(__name__)
 
 METHODS = ("cash", "card", "mobile", "bank")
 LEDGER_COLUMNS = ["Date", "Kind", "Reference", "Charged", "Settled"]
-
-
-class PartyEditor(QDialog):
-    """Create or edit one customer or supplier."""
-
-    def __init__(self, parent=None, party=None, noun: str = "customer",
-                 lock_name: bool = False) -> None:
-        super().__init__(parent)
-        self.party = party
-        creating = party is None
-        self.setWindowTitle(f"New {noun}" if creating else f"Edit {party.name}")
-        self.setMinimumWidth(420)
-
-        form = QFormLayout(self)
-        form.setContentsMargins(24, 20, 24, 20)
-        form.setSpacing(10)
-
-        self.name = QLineEdit(party.name if party else "")
-        self.name.setMaxLength(120)
-        if lock_name:
-            self.name.setReadOnly(True)
-            self.name.setToolTip("The walk-in customer cannot be renamed.")
-        form.addRow("Name", self.name)
-
-        self.phone = QLineEdit(party.phone or "" if party else "")
-        self.phone.setMaxLength(30)
-        form.addRow("Phone", self.phone)
-
-        self.email = QLineEdit(party.email or "" if party else "")
-        self.email.setMaxLength(120)
-        form.addRow("Email", self.email)
-
-        self.address = QLineEdit(party.address or "" if party else "")
-        self.address.setMaxLength(255)
-        form.addRow("Address", self.address)
-
-        self.opening = QDoubleSpinBox()
-        self.opening.setDecimals(2)
-        self.opening.setRange(-99_999_999.0, 99_999_999.0)
-        self.opening.setGroupSeparatorShown(True)
-        self.opening.setValue(float(party.opening_balance if party else 0))
-        self.opening.setMinimumHeight(30)
-        form.addRow(f"Opening balance ({get_settings().currency_symbol})", self.opening)
-
-        hint = QLabel("The opening balance is what was already owed when the "
-                      "shop started using SmartPOS. Leave it at zero for "
-                      "someone new.")
-        hint.setObjectName("hintLabel")
-        hint.setWordWrap(True)
-        form.addRow("", hint)
-
-        buttons = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
-        buttons.accepted.connect(self.accept)
-        buttons.rejected.connect(self.reject)
-        form.addRow(buttons)
-
-    def values(self) -> dict:
-        return {
-            "name": self.name.text().strip(),
-            "phone": self.phone.text().strip(),
-            "email": self.email.text().strip(),
-            "address": self.address.text().strip(),
-            "opening_balance": Decimal(str(self.opening.value())),
-        }
 
 
 class PaymentDialog(QDialog):
@@ -178,13 +121,28 @@ class PartyView(QWidget):
         self._parties: list = []
         self._balances: dict[int, Decimal] = {}
 
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(24, 22, 24, 22)
-        layout.setSpacing(12)
+        self._editing = None
 
-        heading = QLabel(self.plural)
-        heading.setObjectName("viewHeading")
-        layout.addWidget(heading)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(24, 22, 24, 22)
+        outer.setSpacing(12)
+
+        self.heading = QLabel(self.plural)
+        self.heading.setObjectName("viewHeading")
+        outer.addWidget(self.heading)
+
+        self.pages = QStackedWidget()
+        self.pages.addWidget(self._build_list(auth))     # PAGE_LIST
+        self.pages.addWidget(self._build_form())         # PAGE_FORM
+        outer.addWidget(self.pages, 1)
+
+    # -------------------------------------------------------- the list page
+
+    def _build_list(self, auth: AuthService) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(10)
 
         if self.blurb:
             note = QLabel(self.blurb)
@@ -271,6 +229,38 @@ class PartyView(QWidget):
         for b in (self.add_button, self.edit_button, self.payment_button,
                   self.toggle_button, self.delete_button):
             b.setVisible(writable)
+        return page
+
+    # -------------------------------------------------------- the form page
+
+    def _build_form(self) -> QWidget:
+        card = FormCard(save_text=f"Save {self.noun}")
+        self.card = card
+
+        self.f_name = card.add_row("Name", QLineEdit())
+        self.f_name.setMaxLength(120)
+        self.f_phone = card.add_row("Phone", QLineEdit())
+        self.f_phone.setMaxLength(30)
+        self.f_email = card.add_row("Email", QLineEdit())
+        self.f_email.setMaxLength(120)
+        self.f_address = card.add_row("Address", QLineEdit())
+        self.f_address.setMaxLength(255)
+
+        self.f_opening = QDoubleSpinBox()
+        self.f_opening.setDecimals(2)
+        self.f_opening.setRange(-99_999_999.0, 99_999_999.0)
+        self.f_opening.setGroupSeparatorShown(True)
+        card.add_row(f"Opening balance ({get_settings().currency_symbol})",
+                     self.f_opening)
+
+        card.set_hint("The opening balance is what was already owed when the "
+                      "shop started using SmartPOS. Leave it at zero for "
+                      "someone new.")
+        card.save_clicked.connect(self._save)
+        card.cancel_clicked.connect(self._close_form)
+        for field in (self.f_name, self.f_phone, self.f_email, self.f_address):
+            field.returnPressed.connect(self._save)
+        return FormPage(card)
 
     # ------------------------------------------------- subclass responsibility
 
@@ -384,32 +374,77 @@ class PartyView(QWidget):
 
     # ---------------------------------------------------------------- actions
 
+    # --- the form -------------------------------------------------------
+
+    def _open_form(self, party) -> None:
+        self._editing = party
+        protected = party is not None and self._is_protected(party)
+
+        if party is None:
+            self.card.set_title(f"New {self.noun}")
+            self.heading.setText(f"{self.plural} \u203a New {self.noun}")
+            for field in (self.f_name, self.f_phone, self.f_email, self.f_address):
+                field.clear()
+            self.f_opening.setValue(0.0)
+        else:
+            self.card.set_title(f"Edit {party.name}")
+            self.heading.setText(f"{self.plural} \u203a {party.name}")
+            self.f_name.setText(party.name)
+            self.f_phone.setText(party.phone or "")
+            self.f_email.setText(party.email or "")
+            self.f_address.setText(party.address or "")
+            self.f_opening.setValue(float(party.opening_balance or 0))
+
+        # The walk-in customer is the one row the service refuses to rename.
+        self.f_name.setReadOnly(protected)
+        self.f_name.setToolTip("The walk-in customer cannot be renamed."
+                               if protected else "")
+
+        self.pages.setCurrentIndex(PAGE_FORM)
+        target = self.f_phone if protected else self.f_name
+        target.setFocus()
+        target.selectAll()
+
+    def _close_form(self) -> None:
+        self._editing = None
+        self.heading.setText(self.plural)
+        self.pages.setCurrentIndex(PAGE_LIST)
+        self.table.setFocus()
+
     def _create(self) -> None:
-        dialog = PartyEditor(self, None, self.noun)
-        if dialog.exec_() != QDialog.Accepted:
-            return
-        try:
-            self._service().create(**dialog.values())
-        except Exception as exc:
-            self._report(exc)
-            return
-        self.refresh()
+        self._open_form(None)
 
     def _edit(self) -> None:
         party = self._selected()
-        if party is None:
-            return
-        dialog = PartyEditor(self, party, self.noun, lock_name=self._is_protected(party))
-        if dialog.exec_() != QDialog.Accepted:
-            return
-        values = dialog.values()
-        if self._is_protected(party):
+        if party is not None:
+            self._open_form(party)
+
+    def _save(self) -> None:
+        values = {
+            "name": self.f_name.text().strip(),
+            "phone": self.f_phone.text().strip(),
+            "email": self.f_email.text().strip(),
+            "address": self.f_address.text().strip(),
+            "opening_balance": Decimal(str(self.f_opening.value())),
+        }
+        party = self._editing
+        if party is not None and self._is_protected(party):
             values.pop("name")          # the service refuses it anyway
+
+        self.card.set_busy(True)
         try:
-            self._service().update(party.id, **values)
+            if party is None:
+                self._service().create(**values)
+            else:
+                self._service().update(party.id, **values)
         except Exception as exc:
+            # Stay on the form so the entry survives and can be corrected.
             self._report(exc)
             return
+        finally:
+            self.card.set_busy(False)
+
+        self._close_form()
         self.refresh()
 
     def _take_payment(self) -> None:

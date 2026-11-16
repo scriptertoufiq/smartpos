@@ -385,11 +385,17 @@ def test_a_completed_sale_cannot_be_discarded(ctx):
 
 
 def test_held_bills_do_not_appear_in_the_sales_list(ctx):
+    """A held bill is not a sale yet, so the list must not show it.
+
+    Asserted against this test's own two documents rather than the size of the
+    whole table -- a real database has a day's trading in it as well.
+    """
     sales = ctx["sales"]
-    sales.hold(_draft(ctx))
+    held = sales.hold(_draft(ctx))
     completed = sales.create(_draft(ctx))
     listed = {s["id"] for s in sales.list()}
-    assert completed in listed and len(listed) == 1
+    assert completed in listed
+    assert held not in listed
 
 
 # ----------------------------------------------------------------- lookup

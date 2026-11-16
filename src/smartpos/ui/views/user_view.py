@@ -1,8 +1,9 @@
 """User accounts and roles. Admin only.
 
-The first screen with real behaviour behind it: every button here calls
-AuthService, which enforces the same rules whether the caller is this view or
-the command line.
+The list and the form are two pages of one screen rather than a dialog over the
+top. A modal hides the list you were just reading, and on a maximised window it
+floats in the middle of a lot of empty space; switching pages keeps the screen
+whole and leaves room for the form to breathe.
 """
 
 from __future__ import annotations
@@ -12,9 +13,8 @@ from PyQt5.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
     QComboBox,
-    QDialog,
-    QDialogButtonBox,
     QFormLayout,
+    QFrame,
     QHBoxLayout,
     QHeaderView,
     QInputDialog,
@@ -22,6 +22,7 @@ from PyQt5.QtWidgets import (
     QLineEdit,
     QMessageBox,
     QPushButton,
+    QStackedWidget,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -39,90 +40,10 @@ from smartpos.services.warehouse_service import WarehouseService
 log = get_logger(__name__)
 
 COLUMNS = ["ID", "Username", "Full name", "Role", "Warehouse", "Status", "Last login"]
+FORM_WIDTH = 560
 
-
-class UserEditor(QDialog):
-    """Create or edit one account."""
-
-    def __init__(self, parent=None, user: User | None = None,
-                 warehouses: list[Warehouse] | None = None) -> None:
-        super().__init__(parent)
-        self.user = user
-        creating = user is None
-        self.setWindowTitle("New user" if creating else f"Edit {user.username}")
-        self.setMinimumWidth(400)
-
-        form = QFormLayout(self)
-        form.setContentsMargins(24, 20, 24, 20)
-        form.setSpacing(10)
-
-        self.username = QLineEdit(user.username if user else "")
-        self.username.setPlaceholderText("no spaces, at least 3 characters")
-        form.addRow("Username", self.username)
-
-        self.full_name = QLineEdit(user.full_name if user else "")
-        form.addRow("Full name", self.full_name)
-
-        self.role = QComboBox()
-        for role in Role:
-            self.role.addItem(role.value.capitalize(), role)
-        if user:
-            self.role.setCurrentIndex(list(Role).index(user.role))
-        form.addRow("Role", self.role)
-
-        self.warehouse = QComboBox()
-        self.warehouse.addItem("— not posted to an outlet —", None)
-        for warehouse in warehouses or []:
-            self.warehouse.addItem(f"{warehouse.name} ({warehouse.code})", warehouse.id)
-        if user and user.warehouse_id is not None:
-            index = self.warehouse.findData(user.warehouse_id)
-            if index >= 0:
-                self.warehouse.setCurrentIndex(index)
-            else:
-                # The posting points at a warehouse that is gone or disabled;
-                # show it rather than silently clearing it on save.
-                self.warehouse.addItem(f"#{user.warehouse_id} (unavailable)",
-                                       user.warehouse_id)
-                self.warehouse.setCurrentIndex(self.warehouse.count() - 1)
-        form.addRow("Warehouse", self.warehouse)
-
-        if creating:
-            self.password = QLineEdit()
-            self.password.setEchoMode(QLineEdit.Password)
-            self.password.setPlaceholderText("at least 6 characters")
-            form.addRow("Password", self.password)
-
-            self.confirm = QLineEdit()
-            self.confirm.setEchoMode(QLineEdit.Password)
-            form.addRow("Repeat it", self.confirm)
-        else:
-            self.password = None
-            self.confirm = None
-            note = QLabel("Use “Reset password” on the list to change the password.")
-            note.setWordWrap(True)
-            note.setObjectName("hintLabel")
-            form.addRow("", note)
-
-        buttons = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
-        buttons.accepted.connect(self._validate)
-        buttons.rejected.connect(self.reject)
-        form.addRow(buttons)
-
-    def _validate(self) -> None:
-        if self.password is not None and self.password.text() != self.confirm.text():
-            QMessageBox.warning(self, "Check the password",
-                                "The two passwords do not match.")
-            return
-        self.accept()
-
-    def values(self) -> dict:
-        return {
-            "username": self.username.text().strip(),
-            "full_name": self.full_name.text().strip(),
-            "role": self.role.currentData(),
-            "warehouse_id": self.warehouse.currentData(),
-            "password": self.password.text() if self.password is not None else None,
-        }
+PAGE_LIST = 0
+PAGE_FORM = 1
 
 
 class UserView(QWidget):
@@ -133,16 +54,29 @@ class UserView(QWidget):
         self._auth = auth
         self._warehouses = WarehouseService()
         self._users: list[User] = []
+        self._editing: User | None = None
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(24, 22, 24, 22)
         layout.setSpacing(14)
 
-        heading = QLabel("Users")
-        heading.setObjectName("viewHeading")
-        layout.addWidget(heading)
+        self.heading = QLabel("Users")
+        self.heading.setObjectName("viewHeading")
+        layout.addWidget(self.heading)
 
-        # --- toolbar ---------------------------------------------------
+        self.pages = QStackedWidget()
+        self.pages.addWidget(self._build_list())      # PAGE_LIST
+        self.pages.addWidget(self._build_form())      # PAGE_FORM
+        layout.addWidget(self.pages, 1)
+
+    # -------------------------------------------------------- the list page
+
+    def _build_list(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(12)
+
         bar = QHBoxLayout()
         bar.setSpacing(8)
 
@@ -169,7 +103,6 @@ class UserView(QWidget):
         bar.addWidget(self.add_button)
         layout.addLayout(bar)
 
-        # --- table -----------------------------------------------------
         self.table = QTableWidget(0, len(COLUMNS))
         self.table.setHorizontalHeaderLabels(COLUMNS)
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
@@ -177,11 +110,9 @@ class UserView(QWidget):
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.table.verticalHeader().setVisible(False)
         self.table.setAlternatingRowColors(True)
-        header = self.table.horizontalHeader()
-        header.setSectionResizeMode(2, QHeaderView.Stretch)
+        self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
         layout.addWidget(self.table, 1)
 
-        # --- actions ---------------------------------------------------
         actions = QHBoxLayout()
         actions.setSpacing(8)
         self.edit_button = QPushButton("Edit")
@@ -195,31 +126,119 @@ class UserView(QWidget):
             b.setEnabled(False)
             actions.addWidget(b)
         actions.addStretch(1)
-
         self.status = QLabel("")
         self.status.setObjectName("hintLabel")
         actions.addWidget(self.status)
         layout.addLayout(actions)
 
-        # --- wiring ----------------------------------------------------
         self.search.textChanged.connect(self.refresh)
         self.role_filter.currentIndexChanged.connect(self.refresh)
         self.show_disabled.toggled.connect(self.refresh)
-        self.add_button.clicked.connect(self._create)
-        self.edit_button.clicked.connect(self._edit)
+        self.add_button.clicked.connect(self._start_create)
+        self.edit_button.clicked.connect(self._start_edit)
         self.password_button.clicked.connect(self._reset_password)
         self.toggle_button.clicked.connect(self._toggle_active)
         self.delete_button.clicked.connect(self._delete)
         self.table.itemSelectionChanged.connect(self._selection_changed)
-        self.table.doubleClicked.connect(self._edit)
+        self.table.doubleClicked.connect(self._start_edit)
+        return page
+
+    # -------------------------------------------------------- the form page
+
+    def _build_form(self) -> QWidget:
+        page = QWidget()
+        outer = QVBoxLayout(page)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(12)
+
+        row = QHBoxLayout()
+        card = QFrame()
+        card.setObjectName("panelCard")
+        card.setFixedWidth(FORM_WIDTH)   # a form stretched across the
+        # window is unreadable; it sits in a column of a sensible width
+        row.addWidget(card)
+        row.addStretch(1)
+        outer.addLayout(row)
+        outer.addStretch(1)
+
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(18, 16, 18, 16)
+        layout.setSpacing(10)
+
+        self.form_title = QLabel("New user")
+        self.form_title.setObjectName("panelHeading")
+        layout.addWidget(self.form_title)
+
+        form = QFormLayout()
+        form.setSpacing(9)
+        form.setLabelAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        form.setFormAlignment(Qt.AlignLeft | Qt.AlignTop)
+        form.setHorizontalSpacing(14)
+
+        self.f_username = QLineEdit()
+        self.f_username.setPlaceholderText("no spaces, at least 3 characters")
+        self.f_username.setMaxLength(50)
+        self.f_username.setMinimumHeight(30)
+        form.addRow("Username", self.f_username)
+
+        self.f_full_name = QLineEdit()
+        self.f_full_name.setMaxLength(120)
+        self.f_full_name.setMinimumHeight(30)
+        form.addRow("Full name", self.f_full_name)
+
+        self.f_role = QComboBox()
+        for role in Role:
+            self.f_role.addItem(role.value.capitalize(), role)
+        self.f_role.setMinimumHeight(30)
+        form.addRow("Role", self.f_role)
+
+        self.f_warehouse = QComboBox()
+        self.f_warehouse.setMinimumHeight(30)
+        form.addRow("Warehouse", self.f_warehouse)
+
+        self.f_password = QLineEdit()
+        self.f_password.setEchoMode(QLineEdit.Password)
+        self.f_password.setPlaceholderText("at least 6 characters")
+        self.f_password.setMinimumHeight(30)
+        self._password_label = QLabel("Password")
+        form.addRow(self._password_label, self.f_password)
+
+        self.f_confirm = QLineEdit()
+        self.f_confirm.setEchoMode(QLineEdit.Password)
+        self.f_confirm.setMinimumHeight(30)
+        self._confirm_label = QLabel("Repeat it")
+        form.addRow(self._confirm_label, self.f_confirm)
+        layout.addLayout(form)
+
+        self.form_hint = QLabel("")
+        self.form_hint.setObjectName("hintLabel")
+        self.form_hint.setWordWrap(True)
+        layout.addWidget(self.form_hint)
+
+        buttons = QHBoxLayout()
+        buttons.addStretch(1)
+        self.cancel_button = QPushButton("Cancel")
+        self.cancel_button.setMinimumHeight(32)
+        buttons.addWidget(self.cancel_button)
+        self.save_button = QPushButton("Save user")
+        self.save_button.setProperty("primary", True)
+        self.save_button.setMinimumHeight(32)
+        buttons.addWidget(self.save_button)
+        layout.addLayout(buttons)
+
+        self.cancel_button.clicked.connect(self._close_form)
+        self.save_button.clicked.connect(self._save)
+        for field in (self.f_username, self.f_full_name,
+                      self.f_password, self.f_confirm):
+            field.returnPressed.connect(self._save)
+        return page
 
     # ------------------------------------------------------------- helpers
 
     def _selected(self) -> User | None:
-        rows = self.table.selectionModel().selectedRows() if self.table.selectionModel() else []
-        if not rows:
-            return None
-        return self._users[rows[0].row()]
+        model = self.table.selectionModel()
+        rows = model.selectedRows() if model else []
+        return self._users[rows[0].row()] if rows else None
 
     def _selection_changed(self) -> None:
         user = self._selected()
@@ -236,7 +255,6 @@ class UserView(QWidget):
         self.status.setText("This is your own account." if is_self else "")
 
     def _warehouse_options(self) -> list[Warehouse]:
-        """Active outlets only -- nobody should be posted to a closed one."""
         try:
             return self._warehouses.list_all(active_only=True)
         except Exception:
@@ -289,34 +307,110 @@ class UserView(QWidget):
         self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
         self._selection_changed()
 
-    def _create(self) -> None:
-        dialog = UserEditor(self, warehouses=self._warehouse_options())
-        if dialog.exec_() != QDialog.Accepted:
+    # --- the form -------------------------------------------------------
+
+    def _open_form(self, user: User | None) -> None:
+        """Show the form page, filled in for `user` or blank for a new one."""
+        self._editing = user
+        creating = user is None
+
+        self.f_warehouse.clear()
+        self.f_warehouse.addItem("— not posted to an outlet —", None)
+        for warehouse in self._warehouse_options():
+            self.f_warehouse.addItem(f"{warehouse.name} ({warehouse.code})", warehouse.id)
+
+        if creating:
+            self.form_title.setText("New user")
+            self.heading.setText("Users › New user")
+            self.f_username.clear()
+            self.f_full_name.clear()
+            self.f_role.setCurrentIndex(list(Role).index(Role.CASHIER))
+            self.f_warehouse.setCurrentIndex(0)
+            self.form_hint.setText(
+                "The password is set here. The person can change it themselves "
+                "after they sign in.")
+        else:
+            self.form_title.setText(f"Edit {user.username}")
+            self.heading.setText(f"Users › {user.username}")
+            self.f_username.setText(user.username)
+            self.f_full_name.setText(user.full_name)
+            self.f_role.setCurrentIndex(list(Role).index(user.role))
+            if user.warehouse_id is not None:
+                index = self.f_warehouse.findData(user.warehouse_id)
+                if index >= 0:
+                    self.f_warehouse.setCurrentIndex(index)
+                else:
+                    # Posted to an outlet that is closed; show it rather than
+                    # silently clearing the posting on save.
+                    self.f_warehouse.addItem(f"#{user.warehouse_id} (unavailable)",
+                                             user.warehouse_id)
+                    self.f_warehouse.setCurrentIndex(self.f_warehouse.count() - 1)
+            self.form_hint.setText(
+                "Use “Reset password” on the list to change this person's password.")
+
+        # The password pair only belongs on a new account.
+        for widget in (self._password_label, self.f_password,
+                       self._confirm_label, self.f_confirm):
+            widget.setVisible(creating)
+        self.f_password.clear()
+        self.f_confirm.clear()
+
+        self.pages.setCurrentIndex(PAGE_FORM)
+        self.f_username.setFocus()
+
+    def _close_form(self) -> None:
+        self._editing = None
+        self.heading.setText("Users")
+        self.pages.setCurrentIndex(PAGE_LIST)
+        self.table.setFocus()
+
+    def _start_create(self) -> None:
+        self._open_form(None)
+
+    def _start_edit(self) -> None:
+        user = self._selected()
+        if user is not None:
+            self._open_form(user)
+
+    def _save(self) -> None:
+        creating = self._editing is None
+        warehouse_id = self.f_warehouse.currentData()
+
+        if creating and self.f_password.text() != self.f_confirm.text():
+            QMessageBox.warning(self, "Check the password",
+                                "The two passwords do not match.")
+            self.f_confirm.setFocus()
             return
-        v = dialog.values()
+
+        self.save_button.setEnabled(False)
         try:
-            self._auth.create_user(v["username"], v["full_name"], v["password"] or "",
-                                   v["role"], v["warehouse_id"])
+            if creating:
+                self._auth.create_user(
+                    self.f_username.text().strip(),
+                    self.f_full_name.text().strip(),
+                    self.f_password.text(),
+                    self.f_role.currentData(),
+                    warehouse_id)
+            else:
+                self._auth.update_user(
+                    self._editing.id,
+                    full_name=self.f_full_name.text().strip(),
+                    role=self.f_role.currentData(),
+                    username=self.f_username.text().strip())
+                # update_user reads None as "leave it alone", so clearing a
+                # posting has to go through the method that means it.
+                if warehouse_id != self._editing.warehouse_id:
+                    self._auth.set_warehouse(self._editing.id, warehouse_id)
         except Exception as exc:
             self._report(exc)
             return
+        finally:
+            self.save_button.setEnabled(True)
+
+        self._close_form()
         self.refresh()
 
-    def _edit(self) -> None:
-        user = self._selected()
-        if user is None:
-            return
-        dialog = UserEditor(self, user, self._warehouse_options())
-        if dialog.exec_() != QDialog.Accepted:
-            return
-        v = dialog.values()
-        try:
-            self._auth.update_user(user.id, full_name=v["full_name"], role=v["role"],
-                                   warehouse_id=v["warehouse_id"], username=v["username"])
-        except Exception as exc:
-            self._report(exc)
-            return
-        self.refresh()
+    # --- list actions ---------------------------------------------------
 
     def _reset_password(self) -> None:
         user = self._selected()

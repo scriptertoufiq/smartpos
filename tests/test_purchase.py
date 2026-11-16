@@ -333,23 +333,38 @@ def test_the_product_cost_is_updated_on_receipt(ctx):
 
 # ------------------------------------------------------------------ listing
 
+def _ids(rows) -> set:
+    return {row["id"] for row in rows}
+
+
 def test_list_filters_by_supplier_and_date(ctx):
+    """Each filter admits this purchase or excludes it.
+
+    Asserted against this test's own document rather than the size of the whole
+    table: a shop in use has purchases of its own, on today's date and on
+    earlier ones.
+    """
     purchases = ctx["purchases"]
-    purchases.create(_draft(ctx))
-    assert len(purchases.list(supplier_id=ctx["supplier"])) == 1
+    mine = purchases.create(_draft(ctx))
+
+    assert _ids(purchases.list(supplier_id=ctx["supplier"])) == {mine}
     assert purchases.list(supplier_id=999999) == []
-    assert len(purchases.list(date_from=date.today(), date_to=date.today())) == 1
-    assert purchases.list(date_to=date.today() - timedelta(days=1)) == []
+    assert mine in _ids(purchases.list(date_from=date.today(), date_to=date.today()))
+    assert mine not in _ids(
+        purchases.list(date_to=date.today() - timedelta(days=1)))
 
 
 def test_list_filters_by_payment_status(ctx):
     purchases = ctx["purchases"]
-    purchases.create(_draft(ctx))                                   # due
+    due = purchases.create(_draft(ctx))
     draft = _draft(ctx)
     draft.paid_amount = draft.grand_total
-    purchases.create(draft)                                         # paid
-    assert len(purchases.list(payment_status="due")) == 1
-    assert len(purchases.list(payment_status="paid")) == 1
+    paid = purchases.create(draft)
+
+    due_ids = _ids(purchases.list(payment_status="due"))
+    paid_ids = _ids(purchases.list(payment_status="paid"))
+    assert due in due_ids and due not in paid_ids
+    assert paid in paid_ids and paid not in due_ids
 
 
 # ------------------------------------------------------------ authorisation
