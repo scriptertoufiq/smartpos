@@ -14,6 +14,7 @@ output is the canonical format. The Python path produces a file the same
 
 from __future__ import annotations
 
+import re
 import shutil
 import subprocess
 from datetime import datetime
@@ -35,6 +36,17 @@ MANAGE = "backup.manage"
 CONFIRMATION = "CONFIRM"
 FILE_PREFIX = "smartpos_"
 ROWS_PER_INSERT = 200
+
+# `SHOW CREATE VIEW` names the account that created the view, usually root from
+# the container's init scripts. Replaying `DEFINER=root@localhost` as the
+# application user needs SUPER / SET_USER_ID, so a restore would fail on the
+# view. Without the clause the view is owned by whoever restores it.
+_DEFINER = re.compile(r"\s+DEFINER\s*=\s*(`[^`]*`|'[^']*'|\S+)@(`[^`]*`|'[^']*'|\S+)",
+                      re.IGNORECASE)
+
+
+def _strip_definer(sql: str) -> str:
+    return _DEFINER.sub("", sql)
 
 
 def _literal(value) -> str:
@@ -172,7 +184,7 @@ class BackupService:
                 # Views last: they reference the tables above.
                 for view in views:
                     cursor.execute(f"SHOW CREATE VIEW `{view}`")
-                    create = cursor.fetchone()[1]
+                    create = _strip_definer(cursor.fetchone()[1])
                     lines += [f"DROP VIEW IF EXISTS `{view}`;", create + ";", ""]
             finally:
                 cursor.close()
@@ -230,7 +242,8 @@ class BackupService:
         self._dump_with_python(safety, get_settings())
         log.info("Safety copy taken before restore: %s", safety)
 
-        statements = split_statements(text)
+        # Older backups, and mysqldump output, may still carry a DEFINER.
+        statements = split_statements(_strip_definer(text))
         applied = 0
         with transaction() as conn:
             cursor = conn.cursor()

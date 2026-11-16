@@ -173,9 +173,30 @@ def test_closing_is_idempotent(svc):
 def test_the_only_active_outlet_cannot_be_closed(svc):
     """Acceptance: MAIN cannot be closed while it is the only active one."""
     main = next(w for w in svc.list_all(active_only=True) if w.code == "MAIN")
-    assert len(svc.list_all(active_only=True)) == 1, "test needs a single outlet"
-    with pytest.raises(ValidationError, match="only active outlet"):
-        svc.deactivate(main.id)
+
+    # The database may hold other real outlets. Close them for the duration of
+    # the test, directly in SQL (the service would refuse an outlet with stock),
+    # and reopen exactly those afterwards.
+    others = [w.id for w in svc.list_all(active_only=True) if w.id != main.id]
+    _set_active(others, False)
+    try:
+        assert len(svc.list_all(active_only=True)) == 1
+        with pytest.raises(ValidationError, match="only active outlet"):
+            svc.deactivate(main.id)
+    finally:
+        _set_active(others, True)
+
+
+def _set_active(ids: list[int], active: bool) -> None:
+    if not ids:
+        return
+    with connection.transaction() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            f"UPDATE warehouses SET is_active = %s "
+            f"WHERE id IN ({', '.join(['%s'] * len(ids))})",
+            (int(active), *ids))
+        cur.close()
 
 
 def test_an_outlet_holding_stock_cannot_be_closed(svc):
